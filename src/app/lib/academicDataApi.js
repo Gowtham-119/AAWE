@@ -93,6 +93,14 @@ export const getStudentProfileByEmail = async (studentEmail) => {
   const normalizedEmail = normalizeEmail(studentEmail);
   if (!normalizedEmail) return null;
 
+  const fallbackProfile = {
+    registerNo: deriveRollNumberFromEmail(normalizedEmail),
+    name: normalizedEmail.split('@')[0],
+    email: normalizedEmail,
+    mobileNo: '',
+    department: '',
+  };
+
   const { data, error } = await supabase
     .from('students')
     .select('register_no, name, email, mobile_no, department')
@@ -135,7 +143,7 @@ export const getStudentProfileByEmail = async (studentEmail) => {
     .maybeSingle();
 
   if (userError) throw userError;
-  if (!userData) return null;
+  if (!userData) return fallbackProfile;
 
   return {
     registerNo: deriveRollNumberFromEmail(userData.email),

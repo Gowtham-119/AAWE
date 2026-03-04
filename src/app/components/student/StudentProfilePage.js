@@ -56,7 +56,6 @@ const StudentProfilePage = () => {
         if (!row) {
           setProfile((prev) => ({ ...prev, email: user.email }));
           setOriginalEmail(user.email);
-          setMessage({ type: 'error', text: 'Student profile not found for this email.' });
           return;
         }
 
