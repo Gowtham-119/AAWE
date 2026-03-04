@@ -42,10 +42,13 @@ export const getStudents = async () => {
 };
 
 export const getStudentProfileByEmail = async (studentEmail) => {
+  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
   const { data, error } = await supabase
     .from('students')
     .select('register_no, name, email, mobile_no, department')
-    .eq('email', (studentEmail || '').trim().toLowerCase())
+    .ilike('email', normalizedEmail)
     .maybeSingle();
 
   if (error) throw error;
@@ -72,37 +75,55 @@ export const updateStudentProfileByEmail = async ({
   department,
 }) => {
   const normalizedCurrentEmail = (currentEmail || '').trim().toLowerCase();
-  if (!normalizedCurrentEmail) {
-    throw new Error('Current email is required to update profile.');
-  }
+  const normalizedNextEmail = (email || '').trim().toLowerCase();
+  const lookupEmail = normalizedCurrentEmail || normalizedNextEmail;
+  if (!lookupEmail) throw new Error('Email is required to update profile.');
 
   const payload = {
     register_no: (registerNo || '').trim(),
     name: (name || '').trim(),
-    email: (email || '').trim().toLowerCase(),
+    email: normalizedNextEmail,
     mobile_no: (mobileNo || '').trim(),
     department: (department || '').trim(),
   };
 
-  const query = supabase
+  const { data: existingRow, error: existingError } = await supabase
     .from('students')
-    .update(payload)
-    .eq('email', normalizedCurrentEmail);
-
-  const scopedQuery = payload.register_no
-    ? query.eq('register_no', payload.register_no)
-    : query;
-
-  const { data, error } = await scopedQuery
-    .select('register_no, name, email, mobile_no, department')
+    .select('register_no, email')
+    .or(`email.ilike.${lookupEmail}${payload.register_no ? `,register_no.eq.${payload.register_no}` : ''}`)
     .limit(1)
     .maybeSingle();
 
-  if (error) throw error;
+  if (existingError) throw existingError;
 
-  if (!data) {
-    throw new Error('No student record found to update.');
+  let data = null;
+
+  if (existingRow) {
+    const updateQuery = supabase
+      .from('students')
+      .update(payload)
+      .ilike('email', (existingRow.email || '').trim().toLowerCase());
+
+    const { data: updatedRow, error: updateError } = await updateQuery
+      .select('register_no, name, email, mobile_no, department')
+      .limit(1)
+      .maybeSingle();
+
+    if (updateError) throw updateError;
+    data = updatedRow;
+  } else {
+    const { data: insertedRow, error: insertError } = await supabase
+      .from('students')
+      .insert(payload)
+      .select('register_no, name, email, mobile_no, department')
+      .limit(1)
+      .maybeSingle();
+
+    if (insertError) throw insertError;
+    data = insertedRow;
   }
+
+  if (!data) throw new Error('No student record found to update.');
 
   return {
     registerNo: (data.register_no || '').trim(),
@@ -180,8 +201,10 @@ export const assignClassToDepartment = async ({
 export const getClassAssignmentsByStudentEmail = async (studentEmail, departmentCode = null) => {
   const normalizedEmail = (studentEmail || '').trim().toLowerCase();
   const normalizedDepartment = (departmentCode || '').trim().toUpperCase();
+  const inferredDepartment = extractDepartmentCode(normalizedEmail);
+  const fallbackDepartment = normalizedDepartment || (inferredDepartment !== 'NA' ? inferredDepartment : '');
 
-  if (!normalizedEmail && !normalizedDepartment) return [];
+  if (!normalizedEmail && !fallbackDepartment) return [];
 
   if (normalizedEmail) {
     const { data, error } = await supabase
@@ -194,12 +217,12 @@ export const getClassAssignmentsByStudentEmail = async (studentEmail, department
     if ((data || []).length) return data || [];
   }
 
-  if (!normalizedDepartment) return [];
+  if (!fallbackDepartment) return [];
 
   const { data: departmentRows, error: departmentError } = await supabase
     .from('class_assignments')
     .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
-    .eq('department', normalizedDepartment)
+    .eq('department', fallbackDepartment)
     .order('updated_at', { ascending: false });
 
   if (departmentError) throw departmentError;

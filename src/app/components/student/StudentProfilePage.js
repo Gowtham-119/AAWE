@@ -43,6 +43,11 @@ const StudentProfilePage = () => {
     department: '',
   });
 
+  const inferDepartmentFromEmail = (email) => {
+    const match = (email || '').trim().toLowerCase().match(/\.([a-z]{2})\d*@/);
+    return match?.[1]?.toUpperCase() || '';
+  };
+
   useEffect(() => {
     const loadProfile = async () => {
       if (!user?.email) return;
@@ -54,7 +59,11 @@ const StudentProfilePage = () => {
         const row = await getStudentProfileByEmail(user.email);
 
         if (!row) {
-          setProfile((prev) => ({ ...prev, email: user.email }));
+          setProfile((prev) => ({
+            ...prev,
+            email: user.email,
+            department: inferDepartmentFromEmail(user.email),
+          }));
           setOriginalEmail(user.email);
           return;
         }

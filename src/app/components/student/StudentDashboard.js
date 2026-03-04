@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, CardContent, CardHeader, Chip, Grid, LinearProgress, Typography } from '@mui/material';
 import { BookOpen, ClipboardCheck, TrendingUp, Award, Calendar } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
-import { getAttendanceByStudentEmail, getClassAssignmentsByStudentEmail, getMarksByStudentEmail, getStudentDashboardSummary } from '../../lib/academicDataApi';
+import { getAttendanceByStudentEmail, getClassAssignmentsByStudentEmail, getMarksByStudentEmail, getStudentDashboardSummary, getStudentProfileByEmail } from '../../lib/academicDataApi';
 import { supabase } from '../../lib/supabaseClient.js';
 
 export const StudentDashboard = () => {
@@ -16,17 +16,22 @@ export const StudentDashboard = () => {
     assignmentsCount: 0,
   });
   const [isLoadingAssignedClasses, setIsLoadingAssignedClasses] = useState(false);
+  const [resolvedDepartment, setResolvedDepartment] = useState((user?.department || '').trim().toUpperCase());
 
   const loadStudentDashboardData = async () => {
     if (!user?.email) return;
 
     setIsLoadingAssignedClasses(true);
     try {
+      const profile = await getStudentProfileByEmail(user.email);
+      const activeDepartment = ((profile?.department || '').trim().toUpperCase()) || (user?.department || '').trim().toUpperCase();
+      setResolvedDepartment(activeDepartment);
+
       const [assignmentRows, attendanceRows, marksRows, summary] = await Promise.all([
-        getClassAssignmentsByStudentEmail(user.email, user.department),
+        getClassAssignmentsByStudentEmail(user.email, activeDepartment),
         getAttendanceByStudentEmail(user.email),
         getMarksByStudentEmail(user.email),
-        getStudentDashboardSummary(user.email, user.department),
+        getStudentDashboardSummary(user.email, activeDepartment),
       ]);
 
       setAssignedClasses(assignmentRows || []);
@@ -95,6 +100,10 @@ export const StudentDashboard = () => {
   }, [user?.email]);
 
   useEffect(() => {
+    setResolvedDepartment((user?.department || '').trim().toUpperCase());
+  }, [user?.department]);
+
+  useEffect(() => {
     if (!user?.email) return undefined;
 
     const assignmentChannel = supabase
@@ -113,16 +122,16 @@ export const StudentDashboard = () => {
       )
       .subscribe();
 
-    const departmentAssignmentChannel = user?.department
+    const departmentAssignmentChannel = resolvedDepartment
       ? supabase
-        .channel(`student-assignments-dept-${user.department}`)
+        .channel(`student-assignments-dept-${resolvedDepartment}`)
         .on(
           'postgres_changes',
           {
             event: '*',
             schema: 'public',
             table: 'class_assignments',
-            filter: `department=eq.${(user.department || '').trim().toUpperCase()}`,
+            filter: `department=eq.${resolvedDepartment}`,
           },
           () => {
             void loadStudentDashboardData();
@@ -171,7 +180,7 @@ export const StudentDashboard = () => {
       void supabase.removeChannel(attendanceChannel);
       void supabase.removeChannel(marksChannel);
     };
-  }, [user?.email, user?.department]);
+  }, [user?.email, resolvedDepartment]);
 
   const upcomingClasses = useMemo(
     () =>
