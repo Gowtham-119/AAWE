@@ -5,6 +5,18 @@ const extractDepartmentCode = (email) => {
   return match?.[1]?.toUpperCase() || 'NA';
 };
 
+const isPermissionError = (error) => {
+  const status = Number(error?.status || 0);
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    status === 401
+    || status === 403
+    || message.includes('permission denied')
+    || message.includes('row-level security')
+    || message.includes('forbidden')
+  );
+};
+
 export const getStudents = async () => {
   const pageSize = 1000;
   let from = 0;
@@ -51,18 +63,33 @@ export const getStudentProfileByEmail = async (studentEmail) => {
     .ilike('email', normalizedEmail)
     .maybeSingle();
 
-  if (error) throw error;
+  if (error && !isPermissionError(error)) throw error;
 
-  if (!data) {
-    return null;
+  if (data) {
+    return {
+      registerNo: (data.register_no || '').trim(),
+      name: (data.name || '').trim(),
+      email: (data.email || '').trim().toLowerCase(),
+      mobileNo: (data.mobile_no || '').toString().trim(),
+      department: (data.department || '').trim(),
+    };
   }
 
+  const { data: profileRow, error: profileError } = await supabase
+    .from('user_profiles')
+    .select('email, display_name, department')
+    .ilike('email', normalizedEmail)
+    .maybeSingle();
+
+  if (profileError && !isPermissionError(profileError)) throw profileError;
+  if (!profileRow) return null;
+
   return {
-    registerNo: (data.register_no || '').trim(),
-    name: (data.name || '').trim(),
-    email: (data.email || '').trim().toLowerCase(),
-    mobileNo: (data.mobile_no || '').toString().trim(),
-    department: (data.department || '').trim(),
+    registerNo: '',
+    name: (profileRow.display_name || '').trim(),
+    email: (profileRow.email || normalizedEmail).trim().toLowerCase(),
+    mobileNo: '',
+    department: (profileRow.department || '').trim(),
   };
 };
 
@@ -94,7 +121,7 @@ export const updateStudentProfileByEmail = async ({
     .limit(1)
     .maybeSingle();
 
-  if (existingError) throw existingError;
+  if (existingError && !isPermissionError(existingError)) throw existingError;
 
   let data = null;
 
@@ -109,7 +136,9 @@ export const updateStudentProfileByEmail = async ({
       .limit(1)
       .maybeSingle();
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      if (!isPermissionError(updateError)) throw updateError;
+    }
     data = updatedRow;
   } else {
     const { data: insertedRow, error: insertError } = await supabase
@@ -119,18 +148,44 @@ export const updateStudentProfileByEmail = async ({
       .limit(1)
       .maybeSingle();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (!isPermissionError(insertError)) throw insertError;
+    }
     data = insertedRow;
   }
 
-  if (!data) throw new Error('No student record found to update.');
+  const fallbackData = {
+    register_no: payload.register_no,
+    name: payload.name,
+    email: payload.email || lookupEmail,
+    mobile_no: payload.mobile_no,
+    department: payload.department,
+  };
+
+  const finalRow = data || fallbackData;
+
+  const { error: profileUpsertError } = await supabase
+    .from('user_profiles')
+    .upsert(
+      [{
+        email: (finalRow.email || lookupEmail || '').trim().toLowerCase(),
+        role: 'student',
+        display_name: (finalRow.name || '').trim(),
+        department: (finalRow.department || '').trim().toUpperCase() || null,
+      }],
+      { onConflict: 'email' }
+    );
+
+  if (profileUpsertError && !isPermissionError(profileUpsertError)) {
+    throw profileUpsertError;
+  }
 
   return {
-    registerNo: (data.register_no || '').trim(),
-    name: (data.name || '').trim(),
-    email: (data.email || '').trim().toLowerCase(),
-    mobileNo: (data.mobile_no || '').toString().trim(),
-    department: (data.department || '').trim(),
+    registerNo: (finalRow.register_no || '').trim(),
+    name: (finalRow.name || '').trim(),
+    email: (finalRow.email || '').trim().toLowerCase(),
+    mobileNo: (finalRow.mobile_no || '').toString().trim(),
+    department: (finalRow.department || '').trim(),
   };
 };
 

@@ -113,6 +113,18 @@ const inferRoleFromEmail = (email) => {
   return 'student';
 };
 
+const isPermissionError = (error) => {
+  const status = Number(error?.status || 0);
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    status === 401
+    || status === 403
+    || message.includes('permission denied')
+    || message.includes('row-level security')
+    || message.includes('forbidden')
+  );
+};
+
 const buildUser = async (authUser, fallbackRole = null) => {
   if (!authUser) return null;
 
@@ -143,14 +155,19 @@ const recordLoginSuccess = async ({ email, role }) => {
 
   const nowIso = new Date().toISOString();
 
-  const { data: existingRow } = await supabase
+  const { data: existingRow, error: existingError } = await supabase
     .from('users')
     .select('email, login_count, is_active')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
+  if (existingError) {
+    if (isPermissionError(existingError)) return;
+    throw existingError;
+  }
+
   if (!existingRow) {
-    await supabase.from('users').upsert(
+    const { error: upsertError } = await supabase.from('users').upsert(
       [{
         email: normalizedEmail,
         role: (role || 'student').toLowerCase(),
@@ -160,6 +177,11 @@ const recordLoginSuccess = async ({ email, role }) => {
       }],
       { onConflict: 'email' }
     );
+
+    if (upsertError && !isPermissionError(upsertError)) {
+      throw upsertError;
+    }
+
     return;
   }
 
@@ -167,7 +189,7 @@ const recordLoginSuccess = async ({ email, role }) => {
     throw new Error('Access disabled. Please contact administrator.');
   }
 
-  await supabase
+  const { error: updateError } = await supabase
     .from('users')
     .update({
       role: (role || 'student').toLowerCase(),
@@ -176,6 +198,10 @@ const recordLoginSuccess = async ({ email, role }) => {
       updated_at: nowIso,
     })
     .eq('email', normalizedEmail);
+
+  if (updateError && !isPermissionError(updateError)) {
+    throw updateError;
+  }
 };
 
 const parseAuthErrorFromUrl = () => {
@@ -421,7 +447,6 @@ export const AuthProvider = ({ children }) => {
 
     await new Promise((resolve, reject) => {
       let finished = false;
-      let popupClosedAt = null;
 
       const {
         data: { subscription: oauthSubscription },
@@ -471,25 +496,12 @@ export const AuthProvider = ({ children }) => {
       };
 
       const closedWatcher = window.setInterval(async () => {
-        if (!popup || popup.closed) {
-          if (!popupClosedAt) {
-            popupClosedAt = Date.now();
-          }
-
-          const { data: sessionData } = await supabase.auth.getSession();
-          const resolution = await resolveGoogleSessionUser(sessionData.session?.user || null);
-          if (resolution.ok) {
-            settle(resolve);
-            return;
-          }
-
-          if (Date.now() - popupClosedAt < 8000) {
-            return;
-          }
-
-          settle(() => reject(new Error('Google sign-in was cancelled or redirect URL is not configured.')));
+        const { data: sessionData } = await supabase.auth.getSession();
+        const resolution = await resolveGoogleSessionUser(sessionData.session?.user || null);
+        if (resolution.ok) {
+          settle(resolve);
         }
-      }, 400);
+      }, 1000);
 
       const timeout = window.setTimeout(() => {
         try {
@@ -497,7 +509,7 @@ export const AuthProvider = ({ children }) => {
         } catch {
           // noop
         }
-        settle(() => reject(new Error('Google sign-in timed out. Please try again.')));
+        settle(() => reject(new Error('Google sign-in was cancelled or timed out. Please try again.')));
       }, 180000);
 
       window.addEventListener('message', handleMessage);
