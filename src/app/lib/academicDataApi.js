@@ -143,6 +143,56 @@ export const getStudentProfileByEmail = async (studentEmail) => {
     .maybeSingle();
 
   if (userError) throw userError;
+
+  const [assignmentResult, attendanceResult, marksResult] = await Promise.all([
+    supabase
+      .from('class_assignments')
+      .select('student_name, roll_no, department')
+      .ilike('student_email', normalizedEmail)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('attendance_records')
+      .select('student_name, roll_no')
+      .ilike('student_email', normalizedEmail)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('marks_records')
+      .select('student_name, roll_no')
+      .ilike('student_email', normalizedEmail)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  const historyError = [assignmentResult.error, attendanceResult.error, marksResult.error].find(Boolean);
+  if (historyError) throw historyError;
+
+  const derivedName =
+    (assignmentResult.data?.student_name || '').trim()
+    || (attendanceResult.data?.student_name || '').trim()
+    || (marksResult.data?.student_name || '').trim();
+
+  const derivedRollNo =
+    (assignmentResult.data?.roll_no || '').trim()
+    || (attendanceResult.data?.roll_no || '').trim()
+    || (marksResult.data?.roll_no || '').trim();
+
+  const derivedDepartment = (assignmentResult.data?.department || '').trim().toUpperCase();
+
+  if (derivedName || derivedRollNo || derivedDepartment) {
+    return {
+      registerNo: derivedRollNo || fallbackProfile.registerNo,
+      name: derivedName || fallbackProfile.name,
+      email: normalizedEmail,
+      mobileNo: '',
+      department: derivedDepartment,
+    };
+  }
+
   if (!userData) return fallbackProfile;
 
   return {
