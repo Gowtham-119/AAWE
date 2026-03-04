@@ -53,6 +53,16 @@ create table if not exists public.users (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.students (
+  register_no text primary key,
+  name text,
+  email text not null unique,
+  mobile_no text,
+  department text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.users add column if not exists is_active boolean not null default true;
 alter table public.users add column if not exists login_count integer not null default 0;
 alter table public.users add column if not exists last_login_at timestamptz;
@@ -116,6 +126,7 @@ alter table public.department_courses enable row level security;
 alter table public.department_staff enable row level security;
 alter table public.users enable row level security;
 alter table public.system_settings enable row level security;
+alter table public.students enable row level security;
 
 create or replace function public.current_auth_email()
 returns text
@@ -267,6 +278,37 @@ for all
 to authenticated
 using (false)
 with check (false);
+
+drop policy if exists "No anon students access" on public.students;
+create policy "No anon students access"
+on public.students
+for all
+to anon
+using (false)
+with check (false);
+
+drop policy if exists "Authenticated read students" on public.students;
+create policy "Authenticated read students"
+on public.students
+for select
+to authenticated
+using (public.is_current_user_active());
+
+drop policy if exists "Admin write students" on public.students;
+create policy "Admin write students"
+on public.students
+for all
+to authenticated
+using (public.is_current_user_admin())
+with check (public.is_current_user_admin());
+
+drop policy if exists "Student update own profile" on public.students;
+create policy "Student update own profile"
+on public.students
+for update
+to authenticated
+using (lower(email) = public.current_auth_email())
+with check (lower(email) = public.current_auth_email());
 
 drop policy if exists "Authenticated read users" on public.users;
 create policy "Authenticated read users"
