@@ -374,13 +374,74 @@ export const AuthProvider = ({ children }) => {
       throw new Error('Popup was blocked. Please allow popups and try again.');
     }
 
+    const resolveGoogleSessionUser = async (sessionUser) => {
+      if (!sessionUser) {
+        return { ok: false };
+      }
+
+      let resolvedUser = await buildUser(sessionUser || null);
+
+      if (isCombinedFacultyStudentMode && (!resolvedUser?.role || resolvedUser.role === 'admin')) {
+        const inferredRole = inferRoleFromEmail(resolvedUser?.email || sessionUser?.email || '');
+        resolvedUser = {
+          ...resolvedUser,
+          role: inferredRole || resolvedUser?.role || 'student',
+        };
+      }
+
+      if (!resolvedUser?.role) {
+        await supabase.auth.signOut();
+        return { ok: false, error: 'No role found for this email in users table.' };
+      }
+
+      if (resolvedUser?.isActive === false) {
+        await supabase.auth.signOut();
+        return { ok: false, error: 'Access disabled. Please contact administrator.' };
+      }
+
+      if (isCombinedFacultyStudentMode && !['faculty', 'student'].includes(resolvedUser.role)) {
+        await supabase.auth.signOut();
+        return { ok: false, error: 'This account is not mapped as faculty/student.' };
+      }
+
+      if (!isCombinedFacultyStudentMode && resolvedUser.role !== normalizedRole) {
+        await supabase.auth.signOut();
+        return { ok: false, error: `This account is mapped as ${resolvedUser.role}. Select the correct role to continue.` };
+      }
+
+      try {
+        await recordLoginSuccess({ email: resolvedUser?.email, role: resolvedUser?.role });
+        setUser(resolvedUser);
+        return { ok: true };
+      } catch (recordError) {
+        await supabase.auth.signOut();
+        return { ok: false, error: recordError?.message || 'Failed to update login activity.' };
+      }
+    };
+
     await new Promise((resolve, reject) => {
       let finished = false;
+      let popupClosedAt = null;
+
+      const {
+        data: { subscription: oauthSubscription },
+      } = supabase.auth.onAuthStateChange((_event, session) => {
+        void (async () => {
+          if (!session?.user) return;
+          const resolution = await resolveGoogleSessionUser(session.user);
+          if (!resolution.ok) {
+            settle(() => reject(new Error(resolution.error || 'Google sign-in failed.')));
+            return;
+          }
+          settle(resolve);
+        })();
+      });
 
       const cleanup = () => {
         window.removeEventListener('message', handleMessage);
         window.clearInterval(closedWatcher);
         window.clearTimeout(timeout);
+        oauthSubscription.unsubscribe();
       };
 
       const settle = (cb) => {
@@ -400,101 +461,33 @@ export const AuthProvider = ({ children }) => {
 
         if (event.data?.type === GOOGLE_POPUP_SUCCESS) {
           const { data: sessionData } = await supabase.auth.getSession();
-          let resolvedUser = await buildUser(sessionData.session?.user || null);
-
-          if (isCombinedFacultyStudentMode && (!resolvedUser?.role || resolvedUser.role === 'admin')) {
-            const inferredRole = inferRoleFromEmail(resolvedUser?.email || sessionData.session?.user?.email || '');
-            resolvedUser = {
-              ...resolvedUser,
-              role: inferredRole || resolvedUser?.role || 'student',
-            };
-          }
-
-          if (!resolvedUser?.role) {
-            await supabase.auth.signOut();
-            settle(() => reject(new Error('No role found for this email in users table.')));
+          const resolution = await resolveGoogleSessionUser(sessionData.session?.user || null);
+          if (!resolution.ok) {
+            settle(() => reject(new Error(resolution.error || 'Google sign-in failed.')));
             return;
           }
-
-          if (resolvedUser?.isActive === false) {
-            await supabase.auth.signOut();
-            settle(() => reject(new Error('Access disabled. Please contact administrator.')));
-            return;
-          }
-
-          if (isCombinedFacultyStudentMode && !['faculty', 'student'].includes(resolvedUser.role)) {
-            await supabase.auth.signOut();
-            settle(() => reject(new Error('This account is not mapped as faculty/student.')));
-            return;
-          }
-
-          if (!isCombinedFacultyStudentMode && resolvedUser.role !== normalizedRole) {
-            await supabase.auth.signOut();
-            settle(() => reject(new Error(`This account is mapped as ${resolvedUser.role}. Select the correct role to continue.`)));
-            return;
-          }
-
-          try {
-            await recordLoginSuccess({ email: resolvedUser?.email, role: resolvedUser?.role });
-            setUser(resolvedUser);
-            settle(resolve);
-          } catch (recordError) {
-            await supabase.auth.signOut();
-            settle(() => reject(new Error(recordError?.message || 'Failed to update login activity.')));
-          }
+          settle(resolve);
         }
       };
 
       const closedWatcher = window.setInterval(async () => {
         if (!popup || popup.closed) {
-          const { data: sessionData } = await supabase.auth.getSession();
-          if (sessionData.session?.user) {
-            let resolvedUser = await buildUser(sessionData.session.user || null);
-
-            if (isCombinedFacultyStudentMode && (!resolvedUser?.role || resolvedUser.role === 'admin')) {
-              const inferredRole = inferRoleFromEmail(resolvedUser?.email || sessionData.session?.user?.email || '');
-              resolvedUser = {
-                ...resolvedUser,
-                role: inferredRole || resolvedUser?.role || 'student',
-              };
-            }
-
-            if (!resolvedUser?.role) {
-              await supabase.auth.signOut();
-              settle(() => reject(new Error('No role found for this email in users table.')));
-              return;
-            }
-
-            if (resolvedUser?.isActive === false) {
-              await supabase.auth.signOut();
-              settle(() => reject(new Error('Access disabled. Please contact administrator.')));
-              return;
-            }
-
-            if (isCombinedFacultyStudentMode && !['faculty', 'student'].includes(resolvedUser.role)) {
-              await supabase.auth.signOut();
-              settle(() => reject(new Error('This account is not mapped as faculty/student.')));
-              return;
-            }
-
-            if (!isCombinedFacultyStudentMode && resolvedUser.role !== normalizedRole) {
-              await supabase.auth.signOut();
-              settle(() => reject(new Error(`This account is mapped as ${resolvedUser.role}. Select the correct role to continue.`)));
-              return;
-            }
-
-            try {
-              await recordLoginSuccess({ email: resolvedUser?.email, role: resolvedUser?.role });
-              setUser(resolvedUser);
-              settle(resolve);
-              return;
-            } catch (recordError) {
-              await supabase.auth.signOut();
-              settle(() => reject(new Error(recordError?.message || 'Failed to update login activity.')));
-              return;
-            }
+          if (!popupClosedAt) {
+            popupClosedAt = Date.now();
           }
-          settle(() => reject(new Error('Google sign-in was cancelled.')));
+
+          const { data: sessionData } = await supabase.auth.getSession();
+          const resolution = await resolveGoogleSessionUser(sessionData.session?.user || null);
+          if (resolution.ok) {
+            settle(resolve);
+            return;
+          }
+
+          if (Date.now() - popupClosedAt < 8000) {
+            return;
+          }
+
+          settle(() => reject(new Error('Google sign-in was cancelled or redirect URL is not configured.')));
         }
       }, 400);
 
