@@ -5,19 +5,11 @@ const extractDepartmentCode = (email) => {
   return match?.[1]?.toUpperCase() || 'NA';
 };
 
-const normalizeEmail = (value) => (value || '').trim().toLowerCase();
-
-const deriveRollNumberFromEmail = (email) => {
-  const localPart = normalizeEmail(email).split('@')[0] || '';
-  return localPart ? localPart.toUpperCase() : '';
-};
-
 export const getStudents = async () => {
   const pageSize = 1000;
   let from = 0;
   let hasMore = true;
-  const studentTableRows = [];
-  let studentsTableError = null;
+  const allRows = [];
 
   while (hasMore) {
     const to = from + pageSize - 1;
@@ -27,180 +19,47 @@ export const getStudents = async () => {
       .order('register_no', { ascending: true })
       .range(from, to);
 
-    if (error) {
-      studentsTableError = error;
-      break;
-    }
+    if (error) throw error;
 
     const currentRows = data || [];
-    studentTableRows.push(...currentRows);
+    allRows.push(...currentRows);
+
     hasMore = currentRows.length === pageSize;
     from += pageSize;
   }
 
-  const {
-    data: profileRows,
-    error: profileError,
-  } = await supabase
-    .from('user_profiles')
-    .select('email, display_name, role, department')
-    .eq('role', 'student');
-
-  if (studentsTableError && profileError) {
-    throw studentsTableError;
-  }
-
-  const mergedByEmail = new Map();
-
-  (studentTableRows || []).forEach((row) => {
-    const email = normalizeEmail(row.email);
-    if (!email) return;
-
-    mergedByEmail.set(email, {
-      rollNo: (row.register_no || '').trim() || deriveRollNumberFromEmail(email),
-      name: (row.name || '').trim() || email.split('@')[0],
-      email,
-      department: (row.department || '').trim().toUpperCase(),
-      departmentCode: extractDepartmentCode(email),
+  return allRows
+    .map((row, index) => ({
+      id: index + 1,
+      rollNo: (row.register_no || '').trim(),
+      name: (row.name || '').trim(),
+      email: (row.email || '').trim().toLowerCase(),
+      department: (row.department || '').trim(),
+      departmentCode: ((row.email || '').trim().toLowerCase().match(/\.([a-z]{2})\d*@/) || [])[1]?.toUpperCase() || 'NA',
       attendance: true,
-    });
-  });
-
-  (profileRows || []).forEach((row) => {
-    const email = normalizeEmail(row.email);
-    if (!email) return;
-
-    const existing = mergedByEmail.get(email);
-    const department = (row.department || '').trim().toUpperCase();
-
-    mergedByEmail.set(email, {
-      rollNo: existing?.rollNo || deriveRollNumberFromEmail(email),
-      name: existing?.name || (row.display_name || '').trim() || email.split('@')[0],
-      email,
-      department: existing?.department || department,
-      departmentCode: existing?.departmentCode || extractDepartmentCode(email) || department || 'NA',
-      attendance: existing?.attendance ?? true,
-    });
-  });
-
-  return Array.from(mergedByEmail.values())
-    .filter((row) => row.email)
-    .sort((a, b) => (a.rollNo || '').localeCompare(b.rollNo || ''))
-    .map((row, index) => ({ ...row, id: index + 1 }));
+    }))
+    .filter((row) => row.email && row.rollNo);
 };
 
 export const getStudentProfileByEmail = async (studentEmail) => {
-  const normalizedEmail = normalizeEmail(studentEmail);
-  if (!normalizedEmail) return null;
-
-  const fallbackProfile = {
-    registerNo: deriveRollNumberFromEmail(normalizedEmail),
-    name: normalizedEmail.split('@')[0],
-    email: normalizedEmail,
-    mobileNo: '',
-    department: '',
-  };
-
   const { data, error } = await supabase
     .from('students')
     .select('register_no, name, email, mobile_no, department')
-    .ilike('email', normalizedEmail)
+    .eq('email', (studentEmail || '').trim().toLowerCase())
     .maybeSingle();
 
   if (error) throw error;
 
-  if (data) {
-    return {
-      registerNo: (data.register_no || '').trim(),
-      name: (data.name || '').trim(),
-      email: normalizeEmail(data.email),
-      mobileNo: (data.mobile_no || '').toString().trim(),
-      department: (data.department || '').trim(),
-    };
+  if (!data) {
+    return null;
   }
-
-  const { data: profileData, error: profileError } = await supabase
-    .from('user_profiles')
-    .select('email, display_name, department, role')
-    .ilike('email', normalizedEmail)
-    .maybeSingle();
-
-  if (profileError) throw profileError;
-  if (profileData) {
-    return {
-      registerNo: deriveRollNumberFromEmail(profileData.email),
-      name: (profileData.display_name || '').trim(),
-      email: normalizeEmail(profileData.email),
-      mobileNo: '',
-      department: (profileData.department || '').trim().toUpperCase(),
-    };
-  }
-
-  const { data: userData, error: userError } = await supabase
-    .from('users')
-    .select('email, role')
-    .ilike('email', normalizedEmail)
-    .maybeSingle();
-
-  if (userError) throw userError;
-
-  const [assignmentResult, attendanceResult, marksResult] = await Promise.all([
-    supabase
-      .from('class_assignments')
-      .select('student_name, roll_no, department')
-      .ilike('student_email', normalizedEmail)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('attendance_records')
-      .select('student_name, roll_no')
-      .ilike('student_email', normalizedEmail)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('marks_records')
-      .select('student_name, roll_no')
-      .ilike('student_email', normalizedEmail)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-
-  const historyError = [assignmentResult.error, attendanceResult.error, marksResult.error].find(Boolean);
-  if (historyError) throw historyError;
-
-  const derivedName =
-    (assignmentResult.data?.student_name || '').trim()
-    || (attendanceResult.data?.student_name || '').trim()
-    || (marksResult.data?.student_name || '').trim();
-
-  const derivedRollNo =
-    (assignmentResult.data?.roll_no || '').trim()
-    || (attendanceResult.data?.roll_no || '').trim()
-    || (marksResult.data?.roll_no || '').trim();
-
-  const derivedDepartment = (assignmentResult.data?.department || '').trim().toUpperCase();
-
-  if (derivedName || derivedRollNo || derivedDepartment) {
-    return {
-      registerNo: derivedRollNo || fallbackProfile.registerNo,
-      name: derivedName || fallbackProfile.name,
-      email: normalizedEmail,
-      mobileNo: '',
-      department: derivedDepartment,
-    };
-  }
-
-  if (!userData) return fallbackProfile;
 
   return {
-    registerNo: deriveRollNumberFromEmail(userData.email),
-    name: normalizeEmail(userData.email).split('@')[0],
-    email: normalizeEmail(userData.email),
-    mobileNo: '',
-    department: '',
+    registerNo: (data.register_no || '').trim(),
+    name: (data.name || '').trim(),
+    email: (data.email || '').trim().toLowerCase(),
+    mobileNo: (data.mobile_no || '').toString().trim(),
+    department: (data.department || '').trim(),
   };
 };
 
@@ -220,7 +79,7 @@ export const updateStudentProfileByEmail = async ({
   const payload = {
     register_no: (registerNo || '').trim(),
     name: (name || '').trim(),
-    email: normalizeEmail(email),
+    email: (email || '').trim().toLowerCase(),
     mobile_no: (mobileNo || '').trim(),
     department: (department || '').trim(),
   };
@@ -241,52 +100,16 @@ export const updateStudentProfileByEmail = async ({
 
   if (error) throw error;
 
-  if (data) {
-    const normalizedDepartment = (data.department || '').trim().toUpperCase();
-
-    await supabase
-      .from('user_profiles')
-      .upsert(
-        [{
-          email: normalizeEmail(data.email),
-          role: 'student',
-          display_name: (data.name || '').trim(),
-          department: normalizedDepartment || null,
-        }],
-        { onConflict: 'email' }
-      );
-
-    return {
-      registerNo: (data.register_no || '').trim(),
-      name: (data.name || '').trim(),
-      email: normalizeEmail(data.email),
-      mobileNo: (data.mobile_no || '').toString().trim(),
-      department: (data.department || '').trim(),
-    };
+  if (!data) {
+    throw new Error('No student record found to update.');
   }
 
-  const { data: profileData, error: profileError } = await supabase
-    .from('user_profiles')
-    .upsert(
-      [{
-        email: normalizeEmail(payload.email || normalizedCurrentEmail),
-        role: 'student',
-        display_name: payload.name || normalizeEmail(payload.email || normalizedCurrentEmail),
-        department: (payload.department || '').trim().toUpperCase() || null,
-      }],
-      { onConflict: 'email' }
-    )
-    .select('email, display_name, department')
-    .maybeSingle();
-
-  if (profileError) throw profileError;
-
   return {
-    registerNo: payload.register_no || deriveRollNumberFromEmail(profileData?.email || payload.email),
-    name: (profileData?.display_name || payload.name || '').trim(),
-    email: normalizeEmail(profileData?.email || payload.email),
-    mobileNo: payload.mobile_no,
-    department: (profileData?.department || payload.department || '').trim().toUpperCase(),
+    registerNo: (data.register_no || '').trim(),
+    name: (data.name || '').trim(),
+    email: (data.email || '').trim().toLowerCase(),
+    mobileNo: (data.mobile_no || '').toString().trim(),
+    department: (data.department || '').trim(),
   };
 };
 
@@ -969,13 +792,10 @@ export const saveAttendanceForCourseDate = async ({
 };
 
 export const getAttendanceByStudentEmail = async (studentEmail) => {
-  const normalizedEmail = normalizeEmail(studentEmail);
-  if (!normalizedEmail) return [];
-
   const { data, error } = await supabase
     .from('attendance_records')
     .select('course_code, course_name, attendance_date, is_present, faculty_email')
-    .ilike('student_email', normalizedEmail)
+    .eq('student_email', studentEmail)
     .order('attendance_date', { ascending: false });
 
   if (error) throw error;
@@ -1033,13 +853,10 @@ export const saveMarksForCourse = async ({ students, selectedCourse, facultyEmai
 };
 
 export const getMarksByStudentEmail = async (studentEmail) => {
-  const normalizedEmail = normalizeEmail(studentEmail);
-  if (!normalizedEmail) return [];
-
   const { data, error } = await supabase
     .from('marks_records')
     .select('course_code, course_name, mid_term, assignment, quiz, end_term, total, grade')
-    .ilike('student_email', normalizedEmail)
+    .eq('student_email', studentEmail)
     .order('course_code', { ascending: true });
 
   if (error) throw error;
