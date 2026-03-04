@@ -118,14 +118,31 @@ export const getStudentProfileByEmail = async (studentEmail) => {
     .maybeSingle();
 
   if (profileError) throw profileError;
-  if (!profileData) return null;
+  if (profileData) {
+    return {
+      registerNo: deriveRollNumberFromEmail(profileData.email),
+      name: (profileData.display_name || '').trim(),
+      email: normalizeEmail(profileData.email),
+      mobileNo: '',
+      department: (profileData.department || '').trim().toUpperCase(),
+    };
+  }
+
+  const { data: userData, error: userError } = await supabase
+    .from('users')
+    .select('email, role')
+    .ilike('email', normalizedEmail)
+    .maybeSingle();
+
+  if (userError) throw userError;
+  if (!userData) return null;
 
   return {
-    registerNo: deriveRollNumberFromEmail(profileData.email),
-    name: (profileData.display_name || '').trim(),
-    email: normalizeEmail(profileData.email),
+    registerNo: deriveRollNumberFromEmail(userData.email),
+    name: normalizeEmail(userData.email).split('@')[0],
+    email: normalizeEmail(userData.email),
     mobileNo: '',
-    department: (profileData.department || '').trim().toUpperCase(),
+    department: '',
   };
 };
 
