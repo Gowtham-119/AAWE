@@ -35,6 +35,7 @@ export const FacultyDashboard = () => {
   const [isSavingVenue, setIsSavingVenue] = useState(false);
   const [isDeletingCourse, setIsDeletingCourse] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
+  const [targetEmailsInput, setTargetEmailsInput] = useState('');
   const [message, setMessage] = useState({ type: '', text: '' });
 
   const quickStats = [
@@ -356,6 +357,11 @@ export const FacultyDashboard = () => {
   const handleAssignClass = async () => {
     setMessage({ type: '', text: '' });
 
+    const targetStudentEmails = targetEmailsInput
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+
     if (!facultyDepartment) {
       setMessage({ type: 'error', text: 'Please update your department in Profile first.' });
       return;
@@ -386,11 +392,12 @@ export const FacultyDashboard = () => {
         staffName: selectedStaffDetails.name,
         staffEmail: selectedStaffDetails.email,
         facultyEmail: user?.email,
+        targetStudentEmails,
       });
 
       setMessage({
         type: 'success',
-        text: `${selectedCourseDetails.code} assigned to ${assignedRows.length} students in ${facultyDepartment} with venue ${venue}.`,
+        text: `${selectedCourseDetails.code} assigned to ${assignedRows.length} students in ${facultyDepartment} with venue ${venue}${targetStudentEmails.length ? ' (targeted emails)' : ''}.`,
       });
     } catch (error) {
       console.error('Failed to assign class:', error);
@@ -545,6 +552,17 @@ export const FacultyDashboard = () => {
                   ))}
                 </Select>
               </FormControl>
+            </Grid>
+
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Target Student Emails (Optional)"
+                placeholder="student1@college.edu, student2@college.edu"
+                value={targetEmailsInput}
+                onChange={(event) => setTargetEmailsInput(event.target.value)}
+                helperText="Leave empty to assign to the full department. Provide comma-separated emails to target specific students."
+              />
             </Grid>
 
             <Grid size={{ xs: 12 }}>

@@ -3,6 +3,7 @@ import { Box, Card, CardContent, CardHeader, Chip, Grid, LinearProgress, Typogra
 import { BookOpen, ClipboardCheck, TrendingUp, Award, Calendar } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getAttendanceByStudentEmail, getClassAssignmentsByStudentEmail, getMarksByStudentEmail, getStudentDashboardSummary } from '../../lib/academicDataApi';
+import { supabase } from '../../lib/supabaseClient.js';
 
 export const StudentDashboard = () => {
   const { user } = useAuth();
@@ -16,6 +17,72 @@ export const StudentDashboard = () => {
   });
   const [isLoadingAssignedClasses, setIsLoadingAssignedClasses] = useState(false);
 
+  const loadStudentDashboardData = async () => {
+    if (!user?.email) return;
+
+    setIsLoadingAssignedClasses(true);
+    try {
+      const [assignmentRows, attendanceRows, marksRows, summary] = await Promise.all([
+        getClassAssignmentsByStudentEmail(user.email),
+        getAttendanceByStudentEmail(user.email),
+        getMarksByStudentEmail(user.email),
+        getStudentDashboardSummary(user.email),
+      ]);
+
+      setAssignedClasses(assignmentRows || []);
+      setStudentSummary(summary || {
+        attendanceRate: 0,
+        averageMarks: 0,
+        enrolledCoursesCount: 0,
+        assignmentsCount: 0,
+      });
+
+      const attendanceByCourse = new Map();
+      attendanceRows.forEach((row) => {
+        if (!row.course_code) return;
+        if (!attendanceByCourse.has(row.course_code)) {
+          attendanceByCourse.set(row.course_code, { total: 0, present: 0, courseName: row.course_name || row.course_code });
+        }
+        const current = attendanceByCourse.get(row.course_code);
+        current.total += 1;
+        if (row.is_present) current.present += 1;
+      });
+
+      const marksByCourse = new Map();
+      marksRows.forEach((row) => {
+        if (!row.course_code) return;
+        marksByCourse.set(row.course_code, {
+          total: Number(row.total || 0),
+          grade: row.grade || '-',
+          courseName: row.course_name || row.course_code,
+        });
+      });
+
+      const mergedCodes = new Set([...attendanceByCourse.keys(), ...marksByCourse.keys()]);
+      const mappedCards = [...mergedCodes].map((courseCode, index) => {
+        const attendance = attendanceByCourse.get(courseCode);
+        const marks = marksByCourse.get(courseCode);
+        const attendancePct = attendance?.total ? Number(((attendance.present / attendance.total) * 100).toFixed(1)) : 0;
+        return {
+          id: index + 1,
+          code: courseCode,
+          name: marks?.courseName || attendance?.courseName || courseCode,
+          attendance: attendancePct,
+          marks: Number(marks?.total || 0),
+          grade: marks?.grade || '-',
+        };
+      });
+
+      setCourseCards(mappedCards);
+    } catch (error) {
+      console.error('Failed to load assigned classes:', error);
+      setAssignedClasses([]);
+      setCourseCards([]);
+    } finally {
+      setIsLoadingAssignedClasses(false);
+    }
+  };
+
   const studentStats = [
     { title: 'Overall Attendance', value: `${studentSummary.attendanceRate}%`, icon: ClipboardCheck, color: 'bg-green-500', progress: studentSummary.attendanceRate },
     { title: 'Average Marks', value: `${studentSummary.averageMarks}`, icon: TrendingUp, color: 'bg-blue-500', progress: studentSummary.averageMarks },
@@ -24,73 +91,65 @@ export const StudentDashboard = () => {
   ];
 
   useEffect(() => {
-    const loadStudentDashboardData = async () => {
-      if (!user?.email) return;
+    void loadStudentDashboardData();
+  }, [user?.email]);
 
-      setIsLoadingAssignedClasses(true);
-      try {
-        const [assignmentRows, attendanceRows, marksRows, summary] = await Promise.all([
-          getClassAssignmentsByStudentEmail(user.email),
-          getAttendanceByStudentEmail(user.email),
-          getMarksByStudentEmail(user.email),
-          getStudentDashboardSummary(user.email),
-        ]);
+  useEffect(() => {
+    if (!user?.email) return undefined;
 
-        setAssignedClasses(assignmentRows || []);
-        setStudentSummary(summary || {
-          attendanceRate: 0,
-          averageMarks: 0,
-          enrolledCoursesCount: 0,
-          assignmentsCount: 0,
-        });
+    const assignmentChannel = supabase
+      .channel(`student-assignments-${user.email}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'class_assignments',
+          filter: `student_email=eq.${user.email}`,
+        },
+        () => {
+          void loadStudentDashboardData();
+        }
+      )
+      .subscribe();
 
-        const attendanceByCourse = new Map();
-        attendanceRows.forEach((row) => {
-          if (!row.course_code) return;
-          if (!attendanceByCourse.has(row.course_code)) {
-            attendanceByCourse.set(row.course_code, { total: 0, present: 0, courseName: row.course_name || row.course_code });
-          }
-          const current = attendanceByCourse.get(row.course_code);
-          current.total += 1;
-          if (row.is_present) current.present += 1;
-        });
+    const attendanceChannel = supabase
+      .channel(`student-attendance-${user.email}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'attendance_records',
+          filter: `student_email=eq.${user.email}`,
+        },
+        () => {
+          void loadStudentDashboardData();
+        }
+      )
+      .subscribe();
 
-        const marksByCourse = new Map();
-        marksRows.forEach((row) => {
-          if (!row.course_code) return;
-          marksByCourse.set(row.course_code, {
-            total: Number(row.total || 0),
-            grade: row.grade || '-',
-            courseName: row.course_name || row.course_code,
-          });
-        });
+    const marksChannel = supabase
+      .channel(`student-marks-${user.email}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'marks_records',
+          filter: `student_email=eq.${user.email}`,
+        },
+        () => {
+          void loadStudentDashboardData();
+        }
+      )
+      .subscribe();
 
-        const mergedCodes = new Set([...attendanceByCourse.keys(), ...marksByCourse.keys()]);
-        const mappedCards = [...mergedCodes].map((courseCode, index) => {
-          const attendance = attendanceByCourse.get(courseCode);
-          const marks = marksByCourse.get(courseCode);
-          const attendancePct = attendance?.total ? Number(((attendance.present / attendance.total) * 100).toFixed(1)) : 0;
-          return {
-            id: index + 1,
-            code: courseCode,
-            name: marks?.courseName || attendance?.courseName || courseCode,
-            attendance: attendancePct,
-            marks: Number(marks?.total || 0),
-            grade: marks?.grade || '-',
-          };
-        });
-
-        setCourseCards(mappedCards);
-      } catch (error) {
-        console.error('Failed to load assigned classes:', error);
-        setAssignedClasses([]);
-        setCourseCards([]);
-      } finally {
-        setIsLoadingAssignedClasses(false);
-      }
+    return () => {
+      void supabase.removeChannel(assignmentChannel);
+      void supabase.removeChannel(attendanceChannel);
+      void supabase.removeChannel(marksChannel);
     };
-
-    loadStudentDashboardData();
   }, [user?.email]);
 
   const upcomingClasses = useMemo(

@@ -120,6 +120,7 @@ export const assignClassToDepartment = async ({
   staffName,
   staffEmail,
   facultyEmail,
+  targetStudentEmails,
 }) => {
   const normalizedDepartment = (departmentCode || '').trim().toUpperCase();
   if (!normalizedDepartment || normalizedDepartment === 'ALL') {
@@ -131,13 +132,26 @@ export const assignClassToDepartment = async ({
   }
 
   const students = await getStudents();
-  const targetStudents = students.filter((student) => {
+  const departmentStudents = students.filter((student) => {
     const emailDepartment = extractDepartmentCode(student.email);
     const profileDepartment = (student.department || '').trim().toUpperCase();
     return emailDepartment === normalizedDepartment || profileDepartment === normalizedDepartment;
   });
 
+  const normalizedTargetEmails = [...new Set(
+    (Array.isArray(targetStudentEmails) ? targetStudentEmails : [])
+      .map((email) => (email || '').trim().toLowerCase())
+      .filter(Boolean)
+  )];
+
+  const targetStudents = normalizedTargetEmails.length
+    ? departmentStudents.filter((student) => normalizedTargetEmails.includes(student.email))
+    : departmentStudents;
+
   if (!targetStudents.length) {
+    if (normalizedTargetEmails.length) {
+      throw new Error(`No matching students found for selected emails in ${normalizedDepartment} department.`);
+    }
     throw new Error(`No students found for ${normalizedDepartment} department.`);
   }
 

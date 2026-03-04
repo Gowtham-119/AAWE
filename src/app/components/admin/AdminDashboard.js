@@ -2,25 +2,79 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, CardContent, CardHeader, Chip, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
 import { BookOpen, Lock, ShieldCheck, Users } from 'lucide-react';
 import { getAdminAccessOverview } from '../../lib/academicDataApi';
+import { supabase } from '../../lib/supabaseClient.js';
 
 export const AdminDashboard = () => {
   const [overview, setOverview] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    const loadDashboard = async () => {
-      setIsLoading(true);
-      try {
-        const data = await getAdminAccessOverview();
-        setOverview(data);
-      } catch (error) {
-        console.error('Failed to load admin dashboard data:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  const loadDashboard = async () => {
+    setIsLoading(true);
+    try {
+      const data = await getAdminAccessOverview();
+      setOverview(data);
+    } catch (error) {
+      console.error('Failed to load admin dashboard data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    loadDashboard();
+  useEffect(() => {
+    void loadDashboard();
+  }, []);
+
+  useEffect(() => {
+    const usersChannel = supabase
+      .channel('admin-users-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+        },
+        () => {
+          void loadDashboard();
+        }
+      )
+      .subscribe();
+
+    const coursesChannel = supabase
+      .channel('admin-courses-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'department_courses',
+        },
+        () => {
+          void loadDashboard();
+        }
+      )
+      .subscribe();
+
+    const staffChannel = supabase
+      .channel('admin-staff-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'department_staff',
+        },
+        () => {
+          void loadDashboard();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(usersChannel);
+      void supabase.removeChannel(coursesChannel);
+      void supabase.removeChannel(staffChannel);
+    };
   }, []);
 
   const stats = useMemo(() => {
