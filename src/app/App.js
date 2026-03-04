@@ -1,0 +1,203 @@
+import React, { useEffect, useState } from 'react';
+import { Box, Typography } from '@mui/material';
+import { AuthProvider, useAuth } from './context/AuthContext.js';
+import LoginPage from './components/LoginPage.js';
+import { Sidebar } from './components/layout/Sidebar.js';
+import Navbar from './components/layout/Navbar.js';
+import { AdminDashboard } from './components/admin/AdminDashboard.js';
+import { FacultyDashboard } from './components/faculty/FacultyDashboard.js';
+import { StudentDashboard } from './components/student/StudentDashboard.js';
+import StudentCoursesPage from './components/student/StudentCoursesPage.js';
+import StudentAttendancePage from './components/student/StudentAttendancePage.js';
+import StudentMarksPage from './components/student/StudentMarksPage.js';
+import StudentProfilePage from './components/student/StudentProfilePage.js';
+import { AttendancePage } from './components/faculty/AttendancePage.js';
+import { MarksEntryPage } from './components/faculty/MarksEntryPage.js';
+import FacultyProfilePage from './components/faculty/FacultyProfilePage.js';
+import { AnalyticsPage } from './components/admin/AnalyticsPage.js';
+import ManageUsersPage from './components/admin/ManageUsersPage.js';
+import ManageCoursesPage from './components/admin/ManageCoursesPage.js';
+import AdminSettingsPage from './components/admin/AdminSettingsPage.js';
+
+const AppContent = () => {
+  const { user, authLoading, maintenanceMode, maintenanceMessage } = useAuth();
+  const isStudent = user?.role === 'student';
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!user?.role) return;
+
+    const routeByRole = {
+      admin: '/admin-dashboard',
+      faculty: '/faculty-dashboard',
+      student: '/student-dashboard',
+    };
+
+    const nextPath = routeByRole[user.role] || '/';
+    const currentPath = window.location.pathname;
+    const shouldKeepRootPath = currentPath === '/' || currentPath === '/login';
+
+    if (!shouldKeepRootPath && currentPath !== nextPath) {
+      window.history.replaceState({}, '', nextPath);
+    }
+    setCurrentPage('dashboard');
+  }, [user?.role]);
+
+  const handleDesktopSidebarToggle = () => {
+    setSidebarCollapsed((prev) => !prev);
+  };
+
+  const handleMobileSidebarToggle = () => {
+    setMobileSidebarOpen((prev) => !prev);
+  };
+
+  const handleMobileOverlayClose = () => {
+    setMobileSidebarOpen(false);
+  };
+
+  const handleMobileNavigate = (page) => {
+    setCurrentPage(page);
+    setMobileSidebarOpen(false);
+  };
+
+  const renderPageContent = () => {
+    if (!user) {
+      return null;
+    }
+
+    if (user.role === 'admin') {
+      switch (currentPage) {
+        case 'dashboard':
+          return <AdminDashboard />;
+        case 'manage-users':
+          return <ManageUsersPage />;
+        case 'manage-courses':
+          return <ManageCoursesPage />;
+        case 'reports':
+          return <AnalyticsPage />;
+        case 'settings':
+          return <AdminSettingsPage />;
+        default:
+          return <AdminDashboard />;
+      }
+    } else if (user.role === 'faculty') {
+      switch (currentPage) {
+        case 'dashboard':
+          return <FacultyDashboard />;
+        case 'attendance':
+          return <AttendancePage />;
+        case 'marks':
+          return <MarksEntryPage />;
+        case 'profile':
+          return <FacultyProfilePage />;
+        default:
+          return <FacultyDashboard />;
+      }
+    } else {
+      switch (currentPage) {
+        case 'dashboard':
+          return <StudentDashboard />;
+        case 'courses':
+          return <StudentCoursesPage />;
+        case 'attendance':
+          return <StudentAttendancePage />;
+        case 'marks':
+          return <StudentMarksPage />;
+        case 'profile':
+          return <StudentProfilePage />;
+        default:
+          return <StudentDashboard />;
+      }
+    }
+  };
+
+  if (authLoading) return null;
+  if (!user) return <LoginPage />;
+
+  if (maintenanceMode && user.role !== 'admin') {
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'linear-gradient(180deg, #f5f5f7 0%, #e9ecf3 100%)',
+          p: 3,
+        }}
+      >
+        <Box
+          sx={{
+            width: '100%',
+            maxWidth: 560,
+            borderRadius: '24px',
+            background: 'rgba(255,255,255,0.78)',
+            backdropFilter: 'blur(20px)',
+            boxShadow: '0 30px 60px rgba(0,0,0,0.08)',
+            p: { xs: 3, md: 4 },
+            textAlign: 'center',
+          }}
+        >
+          <Typography sx={{ fontSize: { xs: '1.5rem', md: '1.75rem' }, fontWeight: 700, color: '#1d1d1f' }}>
+            Under Maintenance
+          </Typography>
+          <Typography sx={{ mt: 1, color: '#6e6e73' }}>
+            {maintenanceMessage || 'System is under maintenance. Please try again later.'}
+          </Typography>
+        </Box>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ display: 'flex', height: '100vh', backgroundColor: '#f8fafc' }}>
+      <Box sx={{ display: { xs: 'none', lg: 'block' } }}>
+        <Sidebar
+          currentPage={currentPage}
+          onNavigate={setCurrentPage}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={handleDesktopSidebarToggle}
+        />
+      </Box>
+
+      {mobileSidebarOpen && (
+        <Box
+          onClick={handleMobileOverlayClose}
+          sx={{
+            display: { xs: 'block', lg: 'none' },
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            zIndex: 1200,
+          }}
+        >
+          <Box onClick={(e) => e.stopPropagation()} sx={{ backgroundColor: '#fff', height: '100%', width: 256 }}>
+            <Sidebar
+              currentPage={currentPage}
+              onNavigate={handleMobileNavigate}
+              collapsed={false}
+              onToggleCollapse={handleMobileOverlayClose}
+            />
+          </Box>
+        </Box>
+      )}
+
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Navbar onToggleSidebar={handleMobileSidebarToggle} user={user} />
+        <Box component="main" sx={{ flex: 1, overflowY: 'auto', backgroundColor: '#f8fafc' }}>
+          {renderPageContent()}
+        </Box>
+      </Box>
+    </Box>
+  );
+};
+
+const App = () => (
+  <AuthProvider>
+    <AppContent />
+  </AuthProvider>
+);
+
+export default App;
