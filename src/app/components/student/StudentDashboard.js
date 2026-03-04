@@ -23,10 +23,10 @@ export const StudentDashboard = () => {
     setIsLoadingAssignedClasses(true);
     try {
       const [assignmentRows, attendanceRows, marksRows, summary] = await Promise.all([
-        getClassAssignmentsByStudentEmail(user.email),
+        getClassAssignmentsByStudentEmail(user.email, user.department),
         getAttendanceByStudentEmail(user.email),
         getMarksByStudentEmail(user.email),
-        getStudentDashboardSummary(user.email),
+        getStudentDashboardSummary(user.email, user.department),
       ]);
 
       setAssignedClasses(assignmentRows || []);
@@ -113,6 +113,24 @@ export const StudentDashboard = () => {
       )
       .subscribe();
 
+    const departmentAssignmentChannel = user?.department
+      ? supabase
+        .channel(`student-assignments-dept-${user.department}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'class_assignments',
+            filter: `department=eq.${(user.department || '').trim().toUpperCase()}`,
+          },
+          () => {
+            void loadStudentDashboardData();
+          }
+        )
+        .subscribe()
+      : null;
+
     const attendanceChannel = supabase
       .channel(`student-attendance-${user.email}`)
       .on(
@@ -147,10 +165,13 @@ export const StudentDashboard = () => {
 
     return () => {
       void supabase.removeChannel(assignmentChannel);
+      if (departmentAssignmentChannel) {
+        void supabase.removeChannel(departmentAssignmentChannel);
+      }
       void supabase.removeChannel(attendanceChannel);
       void supabase.removeChannel(marksChannel);
     };
-  }, [user?.email]);
+  }, [user?.email, user?.department]);
 
   const upcomingClasses = useMemo(
     () =>

@@ -177,15 +177,42 @@ export const assignClassToDepartment = async ({
   return data || [];
 };
 
-export const getClassAssignmentsByStudentEmail = async (studentEmail) => {
-  const { data, error } = await supabase
+export const getClassAssignmentsByStudentEmail = async (studentEmail, departmentCode = null) => {
+  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
+  const normalizedDepartment = (departmentCode || '').trim().toUpperCase();
+
+  if (!normalizedEmail && !normalizedDepartment) return [];
+
+  if (normalizedEmail) {
+    const { data, error } = await supabase
+      .from('class_assignments')
+      .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+      .ilike('student_email', normalizedEmail)
+      .order('updated_at', { ascending: false });
+
+    if (error) throw error;
+    if ((data || []).length) return data || [];
+  }
+
+  if (!normalizedDepartment) return [];
+
+  const { data: departmentRows, error: departmentError } = await supabase
     .from('class_assignments')
     .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
-    .eq('student_email', studentEmail)
+    .eq('department', normalizedDepartment)
     .order('updated_at', { ascending: false });
 
-  if (error) throw error;
-  return data || [];
+  if (departmentError) throw departmentError;
+
+  const grouped = new Map();
+  (departmentRows || []).forEach((row) => {
+    const key = `${row.course_code || ''}::${row.staff_email || row.staff_name || ''}::${row.venue || ''}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, row);
+    }
+  });
+
+  return Array.from(grouped.values());
 };
 
 export const getClassAssignmentsByDepartment = async (departmentCode) => {
@@ -701,14 +728,14 @@ export const deleteDepartmentCourse = async ({ department, courseCode }) => {
   if (error) throw error;
 };
 
-export const getStudentDashboardSummary = async (studentEmail) => {
+export const getStudentDashboardSummary = async (studentEmail, studentDepartment = null) => {
   const normalizedEmail = (studentEmail || '').trim().toLowerCase();
   if (!normalizedEmail) return null;
 
   const [attendanceResult, marksResult, assignmentResult] = await Promise.all([
     getAttendanceByStudentEmail(normalizedEmail),
     getMarksByStudentEmail(normalizedEmail),
-    getClassAssignmentsByStudentEmail(normalizedEmail),
+    getClassAssignmentsByStudentEmail(normalizedEmail, studentDepartment),
   ]);
 
   const attendanceRate = attendanceResult.length
@@ -806,10 +833,13 @@ export const saveAttendanceForCourseDate = async ({
 };
 
 export const getAttendanceByStudentEmail = async (studentEmail) => {
+  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
+  if (!normalizedEmail) return [];
+
   const { data, error } = await supabase
     .from('attendance_records')
     .select('course_code, course_name, attendance_date, is_present, faculty_email')
-    .eq('student_email', studentEmail)
+    .ilike('student_email', normalizedEmail)
     .order('attendance_date', { ascending: false });
 
   if (error) throw error;
@@ -867,10 +897,13 @@ export const saveMarksForCourse = async ({ students, selectedCourse, facultyEmai
 };
 
 export const getMarksByStudentEmail = async (studentEmail) => {
+  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
+  if (!normalizedEmail) return [];
+
   const { data, error } = await supabase
     .from('marks_records')
     .select('course_code, course_name, mid_term, assignment, quiz, end_term, total, grade')
-    .eq('student_email', studentEmail)
+    .ilike('student_email', normalizedEmail)
     .order('course_code', { ascending: true });
 
   if (error) throw error;
