@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -16,6 +16,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Typography,
@@ -43,6 +44,8 @@ export const MarksEntryPage = () => {
   const { user } = useAuth();
   const [selectedCourse, setSelectedCourse] = useState('CS301');
   const [selectedExam, setSelectedExam] = useState('midterm');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLoadingExisting, setIsLoadingExisting] = useState(false);
@@ -64,12 +67,33 @@ export const MarksEntryPage = () => {
 
   const [students, setStudents] = useState([]);
 
+  const glassCardSx = {
+    borderRadius: 3,
+    backdropFilter: 'blur(18px)',
+    backgroundColor: 'rgba(255,255,255,0.74)',
+    boxShadow: '0 14px 30px rgba(15,23,42,0.10)',
+    border: '1px solid rgba(148,163,184,0.20)',
+  };
+
+  const facultyDepartment = (user?.department || '').trim().toUpperCase();
+
+  const belongsToFacultyDepartment = (student) => {
+    if (!facultyDepartment) return true;
+    const profileDepartment = (student.department || '').trim().toUpperCase();
+    const emailDepartment = ((student.email || '').match(/\.([a-z]{2})\d*@/i) || [])[1]?.toUpperCase() || '';
+    return profileDepartment === facultyDepartment || emailDepartment === facultyDepartment;
+  };
+
   useEffect(() => {
     const loadStudents = async () => {
       setIsLoadingStudents(true);
       try {
         const studentRows = await getStudents();
-        const initial = studentRows.map((student) => {
+        const scopedStudents = user?.role === 'faculty'
+          ? studentRows.filter((student) => belongsToFacultyDepartment(student))
+          : studentRows;
+
+        const initial = scopedStudents.map((student) => {
           const mapped = {
             ...student,
             midTerm: 0,
@@ -95,13 +119,16 @@ export const MarksEntryPage = () => {
     };
 
     loadStudents();
-  }, []);
+  }, [user?.role, user?.department]);
 
-  const updateMark = (id, field, value) => setStudents(students.map(s => s.id === id ? (() => {
-    const updated = { ...s, [field]: value };
-    const total = calculateTotal(updated);
-    return { ...updated, total, grade: calculateGrade(total) };
-  })() : s));
+  const updateMark = (id, field, value) => {
+    setStudents((prevStudents) => prevStudents.map((student) => {
+      if (student.id !== id) return student;
+      const updated = { ...student, [field]: value };
+      const total = calculateTotal(updated);
+      return { ...updated, total, grade: calculateGrade(total) };
+    }));
+  };
 
   useEffect(() => {
     const loadExistingMarks = async () => {
@@ -148,6 +175,10 @@ export const MarksEntryPage = () => {
     loadExistingMarks();
   }, [selectedCourse, students.length]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [selectedCourse, rowsPerPage, students.length]);
+
   const handleSave = async () => {
     const selectedCourseDetails = courses.find((course) => course.code === selectedCourse) || courses[0];
 
@@ -188,19 +219,26 @@ export const MarksEntryPage = () => {
   const avgEndTerm = students.length ? (students.reduce((acc, s) => acc + s.endTerm, 0) / students.length).toFixed(1) : '0.0';
   const avgTotal = students.length ? (students.reduce((acc, s) => acc + s.total, 0) / students.length).toFixed(1) : '0.0';
 
+  const paginatedStudents = useMemo(() => {
+    const start = page * rowsPerPage;
+    return students.slice(start, start + rowsPerPage);
+  }, [students, page, rowsPerPage]);
+
   const gradeChip = (grade) => ({
     backgroundColor: grade.startsWith('A') ? '#dcfce7' : grade.startsWith('B') ? '#dbeafe' : grade.startsWith('C') ? '#fef3c7' : '#fee2e2',
     color: grade.startsWith('A') ? '#15803d' : grade.startsWith('B') ? '#1d4ed8' : grade.startsWith('C') ? '#a16207' : '#b91c1c',
   });
 
   return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ p: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2.25, background: 'radial-gradient(circle at 0% 0%, rgba(186,230,253,0.20), transparent 34%), radial-gradient(circle at 100% 100%, rgba(221,214,254,0.18), transparent 36%)' }}>
       <Box>
-        <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827' }}>Marks Entry</Typography>
-        <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Enter and manage student marks</Typography>
+        <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#111827' }}>Marks Entry</Typography>
+        <Typography sx={{ color: '#6b7280', mt: 0.5 }}>
+          Enter and manage student marks{facultyDepartment ? ` for ${facultyDepartment}` : ''}
+        </Typography>
       </Box>
 
-      <Card>
+      <Card sx={glassCardSx}>
         <CardContent sx={{ p: 3 }}>
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, md: 4 }}>
@@ -230,7 +268,7 @@ export const MarksEntryPage = () => {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card sx={glassCardSx}>
         <CardHeader
           title="Student Marks"
           action={
@@ -260,7 +298,7 @@ export const MarksEntryPage = () => {
               Loading students...
             </Typography>
           )}
-          <TableContainer>
+          <TableContainer sx={{ borderRadius: 2, border: '1px solid rgba(148,163,184,0.22)', backgroundColor: 'rgba(255,255,255,0.62)' }}>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -275,7 +313,7 @@ export const MarksEntryPage = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {students.map((student) => (
+                {paginatedStudents.map((student) => (
                   <TableRow key={student.id}>
                     <TableCell sx={{ fontWeight: 500 }}>{student.rollNo}</TableCell>
                     <TableCell>{student.name}</TableCell>
@@ -299,6 +337,19 @@ export const MarksEntryPage = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePagination
+            component="div"
+            count={students.length}
+            page={page}
+            onPageChange={(_, nextPage) => setPage(nextPage)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(parseInt(event.target.value, 10));
+              setPage(0);
+            }}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+            sx={{ mt: 1 }}
+          />
         </CardContent>
       </Card>
     </Box>

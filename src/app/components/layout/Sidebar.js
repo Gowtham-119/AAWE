@@ -40,24 +40,25 @@ export const Sidebar = ({ currentPage, onNavigate, collapsed, onToggleCollapse }
   return (
     <Box
       sx={{
-        backgroundColor: isStudent || isAdmin ? '#f3f4f6' : '#fff',
-        borderRight: '1px solid #e5e7eb',
+        backgroundColor: 'rgba(255,255,255,0.62)',
+        backdropFilter: 'blur(18px)',
+        borderRight: '1px solid rgba(148,163,184,0.26)',
         display: 'flex',
         flexDirection: 'column',
         transition: 'width 300ms',
         width: collapsed ? 64 : 256,
       }}
     >
-      <Box sx={{ p: 2, borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: isStudent ? 82 : 'auto' }}>
+      <Box sx={{ p: 2, borderBottom: '1px solid rgba(148,163,184,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: isStudent ? 82 : 'auto' }}>
         {!collapsed && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Box sx={{ backgroundColor: isStudent ? '#2f63de' : '#2563eb', p: isStudent ? 1.2 : 1, borderRadius: isStudent ? '999px' : 1.5 }}><GraduationCap size={isStudent ? 18 : 20} color="#fff" /></Box>
+            <Box sx={{ backgroundColor: '#2563eb', p: isStudent ? 1.2 : 1, borderRadius: isStudent ? '999px' : 1.5, boxShadow: '0 12px 24px rgba(37,99,235,0.28)' }}><GraduationCap size={isStudent ? 18 : 20} color="#fff" /></Box>
             <Typography sx={{ fontWeight: 700, color: '#111827' }}>AAWE</Typography>
           </Box>
         )}
-        {collapsed && <Box sx={{ backgroundColor: isStudent ? '#2f63de' : '#2563eb', p: 1, borderRadius: isStudent ? '999px' : 1.5, mx: 'auto' }}><GraduationCap size={isStudent ? 18 : 20} color="#fff" /></Box>}
+        {collapsed && <Box sx={{ backgroundColor: '#2563eb', p: 1, borderRadius: isStudent ? '999px' : 1.5, mx: 'auto', boxShadow: '0 12px 24px rgba(37,99,235,0.28)' }}><GraduationCap size={isStudent ? 18 : 20} color="#fff" /></Box>}
         {!collapsed && (
-          <IconButton onClick={onToggleCollapse} size="small" sx={{ '&:hover': { backgroundColor: '#f3f4f6' } }}>
+          <IconButton onClick={onToggleCollapse} size="small" sx={{ '&:hover': { backgroundColor: 'rgba(226,232,240,0.72)' } }}>
             <ChevronLeft size={16} color="#4b5563" />
           </IconButton>
         )}
@@ -79,12 +80,12 @@ export const Sidebar = ({ currentPage, onNavigate, collapsed, onToggleCollapse }
                 px: isStudent ? 1.75 : 1.5,
                 py: isStudent ? 1.4 : 1.25,
                 borderRadius: isStudent ? 1.75 : 1.5,
-                color: isActive ? '#fff' : (isStudent || isAdmin ? '#111827' : '#374151'),
-                backgroundColor: isActive ? (isStudent || isAdmin ? '#2f63de' : '#2563eb') : 'transparent',
-                boxShadow: isAdmin ? (isActive ? '0 8px 18px rgba(47, 99, 222, 0.28)' : 'none') : (isStudent ? 'none' : (isActive ? 1 : 'none')),
+                color: isActive ? '#fff' : '#334155',
+                background: isActive ? 'linear-gradient(135deg, #4f83ff 0%, #2563eb 100%)' : 'transparent',
+                boxShadow: isActive ? '0 10px 20px rgba(37,99,235,0.26)' : 'none',
                 textTransform: 'none',
                 '&:hover': {
-                  backgroundColor: isActive ? (isStudent || isAdmin ? '#2b59cb' : '#1d4ed8') : (isStudent || isAdmin ? '#e5e7eb' : '#f3f4f6'),
+                  backgroundColor: isActive ? '#1d4ed8' : 'rgba(226,232,240,0.75)',
                 },
               }}
             >
@@ -96,14 +97,14 @@ export const Sidebar = ({ currentPage, onNavigate, collapsed, onToggleCollapse }
       </Box>
 
       {collapsed && (
-        <Box sx={{ p: 1.5, borderTop: '1px solid #e5e7eb' }}>
-          <IconButton onClick={onToggleCollapse} sx={{ width: '100%', borderRadius: 1.5, '&:hover': { backgroundColor: '#f3f4f6' } }}>
+        <Box sx={{ p: 1.5, borderTop: '1px solid rgba(148,163,184,0.22)' }}>
+          <IconButton onClick={onToggleCollapse} sx={{ width: '100%', borderRadius: 1.5, '&:hover': { backgroundColor: 'rgba(226,232,240,0.75)' } }}>
             <ChevronLeft size={20} color="#4b5563" style={{ transform: 'rotate(180deg)' }} />
           </IconButton>
         </Box>
       )}
 
-      <Box sx={{ p: 1.5, borderTop: '1px solid #e5e7eb' }}>
+      <Box sx={{ p: 1.5, borderTop: '1px solid rgba(148,163,184,0.22)' }}>
         <Button
           onClick={logout}
           sx={{
@@ -114,7 +115,7 @@ export const Sidebar = ({ currentPage, onNavigate, collapsed, onToggleCollapse }
             py: 1,
             gap: 1.5,
             textTransform: 'none',
-            '&:hover': { color: '#b91c1c', backgroundColor: '#fef2f2' },
+            '&:hover': { color: '#b91c1c', backgroundColor: 'rgba(254,226,226,0.7)' },
           }}
         >
           <LogOut size={20} />
