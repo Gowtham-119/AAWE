@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Typography } from '@mui/material';
+import { Box, CssBaseline, Typography } from '@mui/material';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
 import LoginPage from './components/LoginPage.js';
 import { Sidebar } from './components/layout/Sidebar.js';
@@ -18,6 +19,58 @@ import { AnalyticsPage } from './components/admin/AnalyticsPage.js';
 import ManageUsersPage from './components/admin/ManageUsersPage.js';
 import ManageCoursesPage from './components/admin/ManageCoursesPage.js';
 import AdminSettingsPage from './components/admin/AdminSettingsPage.js';
+import { prefetchRoleDataToLocalStorage } from './lib/dashboardPrefetch.js';
+
+const appTheme = createTheme({
+  palette: {
+    mode: 'light',
+    background: {
+      default: '#edf2f7',
+      paper: 'rgba(255,255,255,0.78)',
+    },
+    text: {
+      primary: '#0f172a',
+      secondary: '#64748b',
+    },
+    primary: {
+      main: '#2563eb',
+    },
+  },
+  shape: {
+    borderRadius: 14,
+  },
+  typography: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif',
+  },
+  components: {
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          border: '1px solid rgba(148,163,184,0.20)',
+          boxShadow: '0 14px 28px rgba(15,23,42,0.08)',
+          backdropFilter: 'blur(14px)',
+          backgroundColor: 'rgba(255,255,255,0.78)',
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          borderRadius: 12,
+          fontWeight: 600,
+        },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          borderRadius: 999,
+        },
+      },
+    },
+  },
+});
 
 const AppContent = () => {
   const { user, authLoading, maintenanceMode, maintenanceMessage } = useAuth();
@@ -44,6 +97,12 @@ const AppContent = () => {
     }
     setCurrentPage('dashboard');
   }, [user?.role]);
+
+  useEffect(() => {
+    if (!user?.email || !user?.role) return;
+
+    void prefetchRoleDataToLocalStorage(user);
+  }, [user?.email, user?.role, user?.department]);
 
   const handleDesktopSidebarToggle = () => {
     setSidebarCollapsed((prev) => !prev);
@@ -152,7 +211,7 @@ const AppContent = () => {
   }
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh', backgroundColor: '#f8fafc' }}>
+    <Box sx={{ display: 'flex', height: '100vh', background: 'radial-gradient(circle at top left, rgba(186,230,253,0.22), transparent 30%), radial-gradient(circle at bottom right, rgba(221,214,254,0.22), transparent 34%), #edf2f7' }}>
       <Box sx={{ display: { xs: 'none', lg: 'block' } }}>
         <Sidebar
           currentPage={currentPage}
@@ -186,7 +245,7 @@ const AppContent = () => {
 
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Navbar onToggleSidebar={handleMobileSidebarToggle} user={user} />
-        <Box component="main" sx={{ flex: 1, overflowY: 'auto', backgroundColor: '#f8fafc' }}>
+        <Box component="main" sx={{ flex: 1, overflowY: 'auto', width: '100%', background: 'transparent' }}>
           {renderPageContent()}
         </Box>
       </Box>
@@ -195,9 +254,12 @@ const AppContent = () => {
 };
 
 const App = () => (
-  <AuthProvider>
-    <AppContent />
-  </AuthProvider>
+  <ThemeProvider theme={appTheme}>
+    <CssBaseline />
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  </ThemeProvider>
 );
 
 export default App;

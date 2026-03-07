@@ -20,6 +20,7 @@ import {
 import { Pencil } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getStudentProfileByEmail, updateStudentProfileByEmail } from '../../lib/academicDataApi';
+import { supabase } from '../../lib/supabaseClient.js';
 
 const StudentProfilePage = () => {
   const { user } = useAuth();
@@ -42,6 +43,14 @@ const StudentProfilePage = () => {
     mobileNo: '',
     department: '',
   });
+
+  const glassCardSx = {
+    borderRadius: 3,
+    backdropFilter: 'blur(14px)',
+    backgroundColor: 'rgba(255,255,255,0.76)',
+    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
+    border: '1px solid rgba(148,163,184,0.22)',
+  };
 
   const inferDepartmentFromEmail = (email) => {
     const match = (email || '').trim().toLowerCase().match(/\.([a-z]{2})\d*@/);
@@ -85,6 +94,37 @@ const StudentProfilePage = () => {
     };
 
     loadProfile();
+  }, [user?.email]);
+
+  useEffect(() => {
+    if (!user?.email) return undefined;
+
+    const channel = supabase
+      .channel(`student-profile-live-${user.email}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'students' },
+        async () => {
+          try {
+            const row = await getStudentProfileByEmail(user.email);
+            if (!row) return;
+            setProfile({
+              name: row.name || '',
+              registerNo: row.registerNo || '',
+              email: row.email || user.email,
+              mobileNo: row.mobileNo || '',
+              department: row.department || '',
+            });
+          } catch (error) {
+            console.error('Live profile refresh failed:', error);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }, [user?.email]);
 
   const initials = useMemo(() => {
@@ -167,9 +207,9 @@ const StudentProfilePage = () => {
   };
 
   return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ p: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2.25 }}>
       <Box>
-        <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827' }}>Profile</Typography>
+        <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#111827' }}>Profile</Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>View and update your profile</Typography>
       </Box>
 
@@ -179,9 +219,9 @@ const StudentProfilePage = () => {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
+      <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 4 }}>
-          <Card>
+          <Card sx={glassCardSx}>
             <CardContent sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 4 }}>
               <Avatar sx={{ width: 96, height: 96, bgcolor: '#2563eb', fontSize: '2rem', mb: 2 }}>{initials}</Avatar>
               <Typography sx={{ fontWeight: 700, fontSize: '1.25rem', color: '#111827' }}>{profile.name || 'Student'}</Typography>
@@ -196,7 +236,7 @@ const StudentProfilePage = () => {
         </Grid>
 
         <Grid size={{ xs: 12, md: 8 }}>
-          <Card>
+          <Card sx={glassCardSx}>
             <CardHeader
               title="Student Information"
               action={(

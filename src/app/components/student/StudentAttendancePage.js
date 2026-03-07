@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Card,
@@ -17,32 +17,62 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getAttendanceByStudentEmail } from '../../lib/academicDataApi';
+import { supabase } from '../../lib/supabaseClient.js';
 
 const StudentAttendancePage = () => {
   const { user } = useAuth();
   const [attendanceRows, setAttendanceRows] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const loadAttendance = async () => {
-      setIsLoading(true);
-      try {
-        const rows = await getAttendanceByStudentEmail(user?.email || '');
-        setAttendanceRows(rows);
-      } catch (error) {
-        console.error('Failed to fetch attendance:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  const glassCardSx = {
+    borderRadius: 3,
+    backdropFilter: 'blur(14px)',
+    backgroundColor: 'rgba(255,255,255,0.76)',
+    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
+    border: '1px solid rgba(148,163,184,0.22)',
+  };
 
-    if (user?.email) {
-      loadAttendance();
-    } else {
+  const loadAttendance = useCallback(async () => {
+    const normalizedEmail = (user?.email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
       setAttendanceRows([]);
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const rows = await getAttendanceByStudentEmail(normalizedEmail);
+      setAttendanceRows(rows);
+    } catch (error) {
+      console.error('Failed to fetch attendance:', error);
+    } finally {
       setIsLoading(false);
     }
   }, [user?.email]);
+
+  useEffect(() => {
+    void loadAttendance();
+  }, [loadAttendance]);
+
+  useEffect(() => {
+    if (!user?.email) return undefined;
+
+    const channel = supabase
+      .channel(`student-attendance-live-${user.email}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance_records' },
+        () => {
+          void loadAttendance();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [user?.email, loadAttendance]);
 
   const courses = useMemo(() => {
     const grouped = attendanceRows.reduce((acc, row) => {
@@ -112,10 +142,10 @@ const StudentAttendancePage = () => {
   };
 
   return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ p: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2.25, background: 'radial-gradient(circle at 8% 10%, rgba(191,219,254,0.20), transparent 36%), radial-gradient(circle at 100% 92%, rgba(252,211,77,0.14), transparent 42%)' }}>
       {/* Header */}
       <Box>
-        <Typography sx={{ fontSize: '1.875rem', fontWeight: 700 }}>
+        <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em' }}>
           My Attendance
         </Typography>
         <Typography sx={{ color: '#6b7280' }}>
@@ -124,9 +154,9 @@ const StudentAttendancePage = () => {
       </Box>
 
       {/* Summary Cards */}
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={4}>
-          <Card>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card sx={{ ...glassCardSx, background: 'linear-gradient(130deg, #dbeafe 0%, #e0f2fe 100%)' }}>
             <CardContent>
               <Box sx={{ display: 'flex', gap: 1.5, mb: 2 }}>
                 <Calendar size={24} color="#2563eb" />
@@ -144,8 +174,8 @@ const StudentAttendancePage = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4}>
-          <Card>
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card sx={{ ...glassCardSx, background: 'linear-gradient(130deg, #dcfce7 0%, #d1fae5 100%)' }}>
             <CardContent>
               <Box sx={{ display: 'flex', gap: 1.5, mb: 2 }}>
                 <CheckCircle size={24} color="#16a34a" />
@@ -161,8 +191,8 @@ const StudentAttendancePage = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4}>
-          <Card>
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card sx={{ ...glassCardSx, background: 'linear-gradient(130deg, #ffedd5 0%, #fde68a 100%)' }}>
             <CardContent>
               <Box sx={{ display: 'flex', gap: 1.5, mb: 2 }}>
                 <AlertCircle size={24} color="#ea580c" />
@@ -180,7 +210,7 @@ const StudentAttendancePage = () => {
       </Grid>
 
       {/* Course-wise Attendance */}
-      <Card>
+      <Card sx={glassCardSx}>
         <CardHeader title="Course-wise Attendance" />
         <CardContent>
           {isLoading && (
@@ -199,9 +229,10 @@ const StudentAttendancePage = () => {
                 <Box
                   key={course.id}
                   sx={{
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 2,
-                    p: 2
+                    border: '1px solid rgba(148,163,184,0.26)',
+                    borderRadius: 2.25,
+                    p: 1.75,
+                    background: 'linear-gradient(145deg, rgba(255,255,255,0.9), rgba(241,245,249,0.72))',
                   }}
                 >
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
@@ -219,17 +250,17 @@ const StudentAttendancePage = () => {
                   </Box>
 
                   <Grid container spacing={2} mb={1}>
-                    <Grid item xs={4}>
+                    <Grid size={{ xs: 4 }}>
                       <Typography variant="caption">Total</Typography>
                       <Typography fontWeight={600}>{course.totalClasses}</Typography>
                     </Grid>
-                    <Grid item xs={4}>
+                    <Grid size={{ xs: 4 }}>
                       <Typography variant="caption">Attended</Typography>
                       <Typography fontWeight={600} color="#16a34a">
                         {course.attended}
                       </Typography>
                     </Grid>
-                    <Grid item xs={4}>
+                    <Grid size={{ xs: 4 }}>
                       <Typography variant="caption">Missed</Typography>
                       <Typography fontWeight={600} color="#dc2626">
                         {course.totalClasses - course.attended}
@@ -250,7 +281,7 @@ const StudentAttendancePage = () => {
       </Card>
 
       {/* Recent Attendance */}
-      <Card>
+      <Card sx={glassCardSx}>
         <CardHeader title="Recent Attendance Log" />
         <CardContent>
           {!isLoading && recentAttendance.length === 0 && (
@@ -265,7 +296,8 @@ const StudentAttendancePage = () => {
                   justifyContent: 'space-between',
                   p: 1.5,
                   borderRadius: 1.5,
-                  backgroundColor: '#f9fafb'
+                  backgroundColor: 'rgba(248,250,252,0.9)',
+                  border: '1px solid rgba(148,163,184,0.18)'
                 }}
               >
                 <Box sx={{ display: 'flex', gap: 1 }}>

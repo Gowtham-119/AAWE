@@ -26,6 +26,7 @@ import {
   getAttendanceForCourseDate,
   saveAttendanceForCourseDate,
 } from '../../lib/academicDataApi';
+import { supabase } from '../../lib/supabaseClient.js';
 
 export const AttendancePage = () => {
   const { user } = useAuth();
@@ -151,6 +152,44 @@ export const AttendancePage = () => {
 
     loadExistingAttendance();
   }, [selectedCourse, selectedDate, students.length]);
+
+  useEffect(() => {
+    if (!selectedCourse || !selectedDate) return undefined;
+
+    const channel = supabase
+      .channel(`faculty-attendance-live-${selectedCourse}-${selectedDate}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'attendance_records',
+          filter: `course_code=eq.${selectedCourse}`,
+        },
+        async () => {
+          try {
+            const existingRows = await getAttendanceForCourseDate({ courseCode: selectedCourse, selectedDate });
+            const attendanceByEmail = new Map(existingRows.map((row) => [row.student_email, row.is_present]));
+            setStudents((prev) =>
+              prev.map((student) => {
+                if (!attendanceByEmail.has(student.email)) return student;
+                return {
+                  ...student,
+                  attendance: Boolean(attendanceByEmail.get(student.email)),
+                };
+              })
+            );
+          } catch (error) {
+            console.error('Realtime attendance sync failed:', error);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [selectedCourse, selectedDate]);
 
   const updateStudentAttendance = async (student, isPresent) => {
     if (!student || pendingUpdates[student.id] || student.attendance === isPresent) return;

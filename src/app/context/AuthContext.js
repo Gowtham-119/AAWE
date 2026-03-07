@@ -12,7 +12,10 @@ const ROLE_DISPLAY_NAMES = {
 
 const EMAIL_ROLE_OVERRIDES = {
   'gowtham25m@gmail.com': 'faculty',
+  'soundharraj122005@gmail.com': 'faculty',
 };
+
+const toEmailSearchPattern = (email) => `${(email || '').trim().toLowerCase()}%`;
 
 const resolveProfile = async (authUser) => {
   if (!authUser?.email) {
@@ -33,7 +36,7 @@ const resolveProfile = async (authUser) => {
   const { data, error } = await supabase
     .from('user_profiles')
     .select('role, display_name, department')
-    .eq('email', authUser.email)
+    .ilike('email', toEmailSearchPattern(authUser.email))
     .maybeSingle();
 
   if (!error && data) {
@@ -45,7 +48,7 @@ const resolveProfile = async (authUser) => {
   const { data: usersData, error: usersError } = await supabase
     .from('users')
     .select('role')
-    .eq('email', authUser.email)
+    .ilike('email', toEmailSearchPattern(authUser.email))
     .maybeSingle();
 
   if (!usersError && usersData) {
@@ -134,7 +137,7 @@ const buildUser = async (authUser, fallbackRole = null) => {
   const { data: usersRow } = await supabase
     .from('users')
     .select('is_active, login_count, last_login_at')
-    .eq('email', authUser.email)
+    .ilike('email', toEmailSearchPattern(authUser.email))
     .maybeSingle();
 
   return {
@@ -158,7 +161,7 @@ const recordLoginSuccess = async ({ email, role }) => {
   const { data: existingRow, error: existingError } = await supabase
     .from('users')
     .select('email, login_count, is_active')
-    .eq('email', normalizedEmail)
+    .ilike('email', toEmailSearchPattern(normalizedEmail))
     .maybeSingle();
 
   if (existingError) {
@@ -197,7 +200,7 @@ const recordLoginSuccess = async ({ email, role }) => {
       last_login_at: nowIso,
       updated_at: nowIso,
     })
-    .eq('email', normalizedEmail);
+    .ilike('email', toEmailSearchPattern(normalizedEmail));
 
   if (updateError && !isPermissionError(updateError)) {
     throw updateError;

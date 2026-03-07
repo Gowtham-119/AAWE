@@ -5,6 +5,24 @@ const extractDepartmentCode = (email) => {
   return match?.[1]?.toUpperCase() || 'NA';
 };
 
+const normalizeDepartmentCode = (value) => {
+  const normalized = (value || '').trim().toUpperCase();
+  if (!normalized) return '';
+
+  if (['AG', 'CS', 'IT'].includes(normalized)) return normalized;
+
+  const departmentAliases = {
+    AGRICULTURALENGINEERING: 'AG',
+    AGRICULTURAL: 'AG',
+    COMPUTERSCIENCE: 'CS',
+    CSE: 'CS',
+    INFORMATIONTECHNOLOGY: 'IT',
+  };
+
+  const compact = normalized.replace(/[^A-Z]/g, '');
+  return departmentAliases[compact] || normalized;
+};
+
 const isPermissionError = (error) => {
   const status = Number(error?.status || 0);
   const message = String(error?.message || '').toLowerCase();
@@ -15,6 +33,66 @@ const isPermissionError = (error) => {
     || message.includes('row-level security')
     || message.includes('forbidden')
   );
+};
+
+const uniqueNonEmpty = (values) => [...new Set((values || []).map((value) => (value || '').trim()).filter(Boolean))];
+const toEmailSearchPattern = (email) => `${(email || '').trim().toLowerCase()}%`;
+
+const scoreStudentRow = (row, targetEmail) => {
+  const normalizedTargetEmail = (targetEmail || '').trim().toLowerCase();
+  const normalizedRowEmail = (row?.email || '').trim().toLowerCase();
+
+  let score = 0;
+  if (normalizedRowEmail === normalizedTargetEmail) score += 8;
+  if ((row?.register_no || '').toString().trim()) score += 4;
+  if ((row?.name || '').trim()) score += 3;
+  if ((row?.mobile_no || '').toString().trim()) score += 2;
+  if ((row?.department || '').trim()) score += 1;
+  return score;
+};
+
+const pickBestStudentRow = (rows, targetEmail) => {
+  const normalizedTargetEmail = (targetEmail || '').trim().toLowerCase();
+  const candidates = (rows || []).filter(
+    (row) => ((row?.email || '').trim().toLowerCase() === normalizedTargetEmail)
+  );
+
+  if (!candidates.length) return null;
+
+  return candidates
+    .slice()
+    .sort((first, second) => scoreStudentRow(second, normalizedTargetEmail) - scoreStudentRow(first, normalizedTargetEmail))[0] || null;
+};
+
+const resolveStudentIdentityByEmail = async (studentEmail) => {
+  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    return {
+      emails: [],
+      registerNo: '',
+      department: '',
+      name: '',
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('students')
+    .select('email, register_no, department, name')
+    .ilike('email', toEmailSearchPattern(normalizedEmail));
+
+  if (error && !isPermissionError(error)) {
+    throw error;
+  }
+
+  const bestStudentRow = pickBestStudentRow(data || [], normalizedEmail);
+  const canonicalEmail = (bestStudentRow?.email || normalizedEmail).trim().toLowerCase();
+
+  return {
+    emails: uniqueNonEmpty([normalizedEmail, canonicalEmail]),
+    registerNo: (bestStudentRow?.register_no || '').trim(),
+    department: normalizeDepartmentCode(bestStudentRow?.department),
+    name: (bestStudentRow?.name || '').trim(),
+  };
 };
 
 export const getStudents = async () => {
@@ -60,25 +138,39 @@ export const getStudentProfileByEmail = async (studentEmail) => {
   const { data, error } = await supabase
     .from('students')
     .select('register_no, name, email, mobile_no, department')
-    .ilike('email', normalizedEmail)
-    .maybeSingle();
+    .ilike('email', toEmailSearchPattern(normalizedEmail));
 
-  if (error && !isPermissionError(error)) throw error;
+  let studentRows = data || [];
 
-  if (data) {
+  // Some environments may not have mobile_no in students. Retry without it.
+  if (error && String(error?.message || '').toLowerCase().includes('mobile_no')) {
+    const { data: fallbackRows, error: fallbackError } = await supabase
+      .from('students')
+      .select('register_no, name, email, department')
+      .ilike('email', toEmailSearchPattern(normalizedEmail));
+
+    if (fallbackError && !isPermissionError(fallbackError)) throw fallbackError;
+    studentRows = (fallbackRows || []).map((row) => ({ ...row, mobile_no: '' }));
+  } else if (error && !isPermissionError(error)) {
+    throw error;
+  }
+
+  const bestStudentRow = pickBestStudentRow(studentRows, normalizedEmail);
+
+  if (bestStudentRow) {
     return {
-      registerNo: (data.register_no || '').trim(),
-      name: (data.name || '').trim(),
-      email: (data.email || '').trim().toLowerCase(),
-      mobileNo: (data.mobile_no || '').toString().trim(),
-      department: (data.department || '').trim(),
+      registerNo: (bestStudentRow.register_no || '').trim(),
+      name: (bestStudentRow.name || '').trim(),
+      email: (bestStudentRow.email || '').trim().toLowerCase(),
+      mobileNo: (bestStudentRow.mobile_no || '').toString().trim(),
+      department: (bestStudentRow.department || '').trim(),
     };
   }
 
   const { data: profileRow, error: profileError } = await supabase
     .from('user_profiles')
     .select('email, display_name, department')
-    .ilike('email', normalizedEmail)
+    .ilike('email', toEmailSearchPattern(normalizedEmail))
     .maybeSingle();
 
   if (profileError && !isPermissionError(profileError)) throw profileError;
@@ -254,22 +346,78 @@ export const assignClassToDepartment = async ({
 };
 
 export const getClassAssignmentsByStudentEmail = async (studentEmail, departmentCode = null) => {
-  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
-  const normalizedDepartment = (departmentCode || '').trim().toUpperCase();
+  const identity = await resolveStudentIdentityByEmail(studentEmail);
+  const normalizedEmail = identity.emails[0] || '';
+  const normalizedDepartment = normalizeDepartmentCode(departmentCode);
   const inferredDepartment = extractDepartmentCode(normalizedEmail);
-  const fallbackDepartment = normalizedDepartment || (inferredDepartment !== 'NA' ? inferredDepartment : '');
+  const fallbackDepartment = normalizedDepartment || identity.department || (inferredDepartment !== 'NA' ? inferredDepartment : '');
 
-  if (!normalizedEmail && !fallbackDepartment) return [];
+  if (!identity.emails.length && !fallbackDepartment) return [];
 
-  if (normalizedEmail) {
-    const { data, error } = await supabase
-      .from('class_assignments')
-      .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
-      .ilike('student_email', normalizedEmail)
-      .order('updated_at', { ascending: false });
+  if (identity.emails.length) {
+    const assignmentResults = await Promise.all(
+      identity.emails.map((email) =>
+        supabase
+          .from('class_assignments')
+          .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+          .ilike('student_email', email)
+          .order('updated_at', { ascending: false })
+      )
+    );
 
-    if (error) throw error;
-    if ((data || []).length) return data || [];
+    const firstEmailError = assignmentResults.map((result) => result.error).find(Boolean);
+    if (firstEmailError) throw firstEmailError;
+
+    const emailRows = assignmentResults.flatMap((result) => result.data || []);
+    if (emailRows.length) {
+      const grouped = new Map();
+      emailRows.forEach((row) => {
+        const key = `${row.course_code || ''}::${row.staff_email || row.staff_name || ''}::${row.venue || ''}`;
+        if (!grouped.has(key)) {
+          grouped.set(key, row);
+        }
+      });
+      return Array.from(grouped.values());
+    }
+  }
+
+  const additionalLookupQueries = [];
+  if (identity.registerNo) {
+    additionalLookupQueries.push(
+      supabase
+        .from('class_assignments')
+        .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+        .ilike('roll_no', `%${identity.registerNo}%`)
+        .order('updated_at', { ascending: false })
+    );
+  }
+
+  if (identity.name && identity.name.length >= 3) {
+    additionalLookupQueries.push(
+      supabase
+        .from('class_assignments')
+        .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+        .ilike('student_name', `%${identity.name}%`)
+        .order('updated_at', { ascending: false })
+    );
+  }
+
+  if (additionalLookupQueries.length) {
+    const additionalResults = await Promise.all(additionalLookupQueries);
+    const additionalError = additionalResults.map((result) => result.error).find(Boolean);
+    if (additionalError) throw additionalError;
+
+    const additionalRows = additionalResults.flatMap((result) => result.data || []);
+    if (additionalRows.length) {
+      const grouped = new Map();
+      additionalRows.forEach((row) => {
+        const key = `${row.course_code || ''}::${row.staff_email || row.staff_name || ''}::${row.venue || ''}`;
+        if (!grouped.has(key)) {
+          grouped.set(key, row);
+        }
+      });
+      return Array.from(grouped.values());
+    }
   }
 
   if (!fallbackDepartment) return [];
@@ -277,7 +425,7 @@ export const getClassAssignmentsByStudentEmail = async (studentEmail, department
   const { data: departmentRows, error: departmentError } = await supabase
     .from('class_assignments')
     .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
-    .eq('department', fallbackDepartment)
+    .ilike('department', fallbackDepartment)
     .order('updated_at', { ascending: false });
 
   if (departmentError) throw departmentError;
@@ -911,17 +1059,56 @@ export const saveAttendanceForCourseDate = async ({
 };
 
 export const getAttendanceByStudentEmail = async (studentEmail) => {
-  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
-  if (!normalizedEmail) return [];
+  const identity = await resolveStudentIdentityByEmail(studentEmail);
+  if (!identity.emails.length && !identity.registerNo && !identity.name) return [];
 
-  const { data, error } = await supabase
-    .from('attendance_records')
-    .select('course_code, course_name, attendance_date, is_present, faculty_email')
-    .ilike('student_email', normalizedEmail)
-    .order('attendance_date', { ascending: false });
+  const emailResults = await Promise.all(
+    identity.emails.map((email) =>
+      supabase
+        .from('attendance_records')
+        .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+        .ilike('student_email', email)
+        .order('attendance_date', { ascending: false })
+    )
+  );
 
-  if (error) throw error;
-  return data || [];
+  const firstEmailError = emailResults.map((result) => result.error).find(Boolean);
+  if (firstEmailError) throw firstEmailError;
+
+  let rollNoRows = [];
+  if (identity.registerNo) {
+    const { data: rollRows, error: rollError } = await supabase
+      .from('attendance_records')
+      .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+      .ilike('roll_no', `%${identity.registerNo}%`)
+      .order('attendance_date', { ascending: false });
+
+    if (rollError) throw rollError;
+    rollNoRows = rollRows || [];
+  }
+
+  let nameRows = [];
+  if (identity.name && identity.name.length >= 3) {
+    const { data: studentNameRows, error: nameError } = await supabase
+      .from('attendance_records')
+      .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+      .ilike('student_name', `%${identity.name}%`)
+      .order('attendance_date', { ascending: false });
+
+    if (nameError) throw nameError;
+    nameRows = studentNameRows || [];
+  }
+
+  const mergedRows = [...emailResults.flatMap((result) => result.data || []), ...rollNoRows, ...nameRows];
+  const deduped = new Map();
+  mergedRows.forEach((row) => {
+    const key = `${row.course_code || ''}::${row.attendance_date || ''}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, row);
+    }
+  });
+
+  return Array.from(deduped.values());
 };
 
 export const getAttendanceForCourseDate = async ({
@@ -975,17 +1162,56 @@ export const saveMarksForCourse = async ({ students, selectedCourse, facultyEmai
 };
 
 export const getMarksByStudentEmail = async (studentEmail) => {
-  const normalizedEmail = (studentEmail || '').trim().toLowerCase();
-  if (!normalizedEmail) return [];
+  const identity = await resolveStudentIdentityByEmail(studentEmail);
+  if (!identity.emails.length && !identity.registerNo && !identity.name) return [];
 
-  const { data, error } = await supabase
-    .from('marks_records')
-    .select('course_code, course_name, mid_term, assignment, quiz, end_term, total, grade')
-    .ilike('student_email', normalizedEmail)
-    .order('course_code', { ascending: true });
+  const emailResults = await Promise.all(
+    identity.emails.map((email) =>
+      supabase
+        .from('marks_records')
+        .select('course_code, course_name, mid_term, assignment, quiz, end_term, total, grade, roll_no')
+        .ilike('student_email', email)
+        .order('course_code', { ascending: true })
+    )
+  );
 
-  if (error) throw error;
-  return data || [];
+  const firstEmailError = emailResults.map((result) => result.error).find(Boolean);
+  if (firstEmailError) throw firstEmailError;
+
+  let rollNoRows = [];
+  if (identity.registerNo) {
+    const { data: rollRows, error: rollError } = await supabase
+      .from('marks_records')
+      .select('course_code, course_name, mid_term, assignment, quiz, end_term, total, grade, roll_no')
+      .ilike('roll_no', `%${identity.registerNo}%`)
+      .order('course_code', { ascending: true });
+
+    if (rollError) throw rollError;
+    rollNoRows = rollRows || [];
+  }
+
+  let nameRows = [];
+  if (identity.name && identity.name.length >= 3) {
+    const { data: studentNameRows, error: nameError } = await supabase
+      .from('marks_records')
+      .select('course_code, course_name, mid_term, assignment, quiz, end_term, total, grade, roll_no')
+      .ilike('student_name', `%${identity.name}%`)
+      .order('course_code', { ascending: true });
+
+    if (nameError) throw nameError;
+    nameRows = studentNameRows || [];
+  }
+
+  const mergedRows = [...emailResults.flatMap((result) => result.data || []), ...rollNoRows, ...nameRows];
+  const deduped = new Map();
+  mergedRows.forEach((row) => {
+    const key = `${row.course_code || ''}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, row);
+    }
+  });
+
+  return Array.from(deduped.values());
 };
 
 export const getMarksForCourse = async (courseCode) => {

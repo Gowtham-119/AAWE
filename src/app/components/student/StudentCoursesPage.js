@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Card, CardContent, CardHeader, Chip, Grid, Typography } from '@mui/material';
 import { useAuth } from '../../context/AuthContext.js';
 import { getAttendanceByStudentEmail, getMarksByStudentEmail } from '../../lib/academicDataApi';
+import { supabase } from '../../lib/supabaseClient.js';
 
 const COURSE_CATALOG = [
   { code: 'CS301', name: 'Data Structures & Algorithms', instructor: 'Dr. Vasudaven', credits: 4, semester: 'Spring 2026' },
@@ -17,15 +18,26 @@ const StudentCoursesPage = () => {
   const [courseRows, setCourseRows] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    const loadCourses = async () => {
-      if (!user?.email) return;
+  const glassCardSx = {
+    borderRadius: 3,
+    backdropFilter: 'blur(14px)',
+    backgroundColor: 'rgba(255,255,255,0.76)',
+    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
+    border: '1px solid rgba(148,163,184,0.22)',
+  };
+
+  const loadCourses = useCallback(async () => {
+      const normalizedEmail = (user?.email || '').trim().toLowerCase();
+      if (!normalizedEmail) {
+        setCourseRows([]);
+        return;
+      }
 
       setIsLoading(true);
       try {
         const [attendanceRows, marksRows] = await Promise.all([
-          getAttendanceByStudentEmail(user.email),
-          getMarksByStudentEmail(user.email),
+          getAttendanceByStudentEmail(normalizedEmail),
+          getMarksByStudentEmail(normalizedEmail),
         ]);
 
         const catalogByCode = new Map(COURSE_CATALOG.map((course) => [course.code, course]));
@@ -75,21 +87,45 @@ const StudentCoursesPage = () => {
       } finally {
         setIsLoading(false);
       }
-    };
+    }, [user?.email]);
 
-    loadCourses();
-  }, [user?.email]);
+  useEffect(() => {
+    void loadCourses();
+  }, [loadCourses]);
+
+  useEffect(() => {
+    if (!user?.email) return undefined;
+
+    const attendanceChannel = supabase
+      .channel(`student-courses-attendance-${user.email}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_records' }, () => {
+        void loadCourses();
+      })
+      .subscribe();
+
+    const marksChannel = supabase
+      .channel(`student-courses-marks-${user.email}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'marks_records' }, () => {
+        void loadCourses();
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(attendanceChannel);
+      void supabase.removeChannel(marksChannel);
+    };
+  }, [user?.email, loadCourses]);
 
   const courses = useMemo(() => courseRows, [courseRows]);
 
   return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ p: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2.25 }}>
       <Box>
-        <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827' }}>My Courses</Typography>
+        <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#111827' }}>My Courses</Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>View enrolled courses</Typography>
       </Box>
 
-      <Card>
+      <Card sx={glassCardSx}>
         <CardHeader title="Enrolled Courses" subheader={`${courses.length} active courses`} />
         <CardContent>
           {isLoading && (
@@ -97,10 +133,10 @@ const StudentCoursesPage = () => {
               Loading courses...
             </Typography>
           )}
-          <Grid container spacing={2}>
+          <Grid container spacing={1.5}>
             {courses.map((course) => (
               <Grid key={course.id} size={{ xs: 12, md: 6, lg: 4 }}>
-                <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 1.5, p: 2, height: '100%' }}>
+                <Box sx={{ border: '1px solid rgba(148,163,184,0.24)', borderRadius: 2.25, p: 1.75, height: '100%', background: 'linear-gradient(145deg, rgba(255,255,255,0.88), rgba(241,245,249,0.75))' }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1, mb: 1 }}>
                     <Typography sx={{ fontWeight: 600, color: '#111827' }}>{course.name}</Typography>
                     <Chip size="small" label={course.status} sx={{ backgroundColor: '#dcfce7', color: '#15803d' }} />
