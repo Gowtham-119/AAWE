@@ -1,36 +1,50 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, CardHeader, Dialog, DialogActions, DialogContent, DialogTitle, Grid, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Box, Button, Card, CardContent, CardHeader, Dialog, DialogActions, DialogContent, DialogTitle, Grid, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { deleteDepartmentCourse, getDepartmentCoursesAdmin, upsertDepartmentCourse } from '../../lib/academicDataApi';
+import { queryKeys } from '../../lib/queryKeys';
+import { STATIC_STALE_TIME_MS } from '../../lib/queryClient';
+import { toast } from 'sonner';
 
 const ManageCoursesPage = () => {
-  const [courses, setCourses] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
   const [form, setForm] = useState({
     department: '',
     courseCode: '',
     courseName: '',
   });
 
-  const loadCourses = async () => {
-    setIsLoading(true);
-    try {
-      const rows = await getDepartmentCoursesAdmin();
-      setCourses(rows);
-    } catch (error) {
-      console.error('Failed to load courses:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to load courses.' });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const { data: courses = [], isLoading } = useQuery({
+    queryKey: queryKeys.admin.courses(),
+    queryFn: getDepartmentCoursesAdmin,
+    staleTime: STATIC_STALE_TIME_MS,
+  });
 
-  useEffect(() => {
-    void loadCourses();
-  }, []);
+  const saveCourseMutation = useMutation({
+    mutationFn: upsertDepartmentCourse,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
+      toast.success('Course saved successfully.');
+      setIsModalOpen(false);
+    },
+    onError: (error) => {
+      console.error('Failed to save course:', error);
+      toast.error(error?.message || 'Failed to save course.');
+    },
+  });
+
+  const deleteCourseMutation = useMutation({
+    mutationFn: (course) => deleteDepartmentCourse({ department: course.department, courseCode: course.courseCode }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.courses() });
+      toast.success('Course deleted successfully.');
+    },
+    onError: (error) => {
+      console.error('Failed to delete course:', error);
+      toast.error(error?.message || 'Failed to delete course.');
+    },
+  });
 
   const handleOpenCreate = () => {
     setForm({ department: '', courseCode: '', courseName: '' });
@@ -47,34 +61,11 @@ const ManageCoursesPage = () => {
   };
 
   const handleSave = async () => {
-    setIsSaving(true);
-    setMessage({ type: '', text: '' });
-    try {
-      await upsertDepartmentCourse(form);
-      setMessage({ type: 'success', text: 'Course saved successfully.' });
-      setIsModalOpen(false);
-      await loadCourses();
-    } catch (error) {
-      console.error('Failed to save course:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to save course.' });
-    } finally {
-      setIsSaving(false);
-    }
+    await saveCourseMutation.mutateAsync(form);
   };
 
   const handleDelete = async (course) => {
-    setIsDeleting(true);
-    setMessage({ type: '', text: '' });
-    try {
-      await deleteDepartmentCourse({ department: course.department, courseCode: course.courseCode });
-      setMessage({ type: 'success', text: 'Course deleted successfully.' });
-      await loadCourses();
-    } catch (error) {
-      console.error('Failed to delete course:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to delete course.' });
-    } finally {
-      setIsDeleting(false);
-    }
+    await deleteCourseMutation.mutateAsync(course);
   };
 
   const glassCardSx = {
@@ -90,10 +81,6 @@ const ManageCoursesPage = () => {
         <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827' }}>Manage Courses</Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Configure academic courses by department</Typography>
       </Box>
-
-      {message.text && (
-        <Alert severity={message.type === 'success' ? 'success' : 'error'}>{message.text}</Alert>
-      )}
 
       <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
         <Button variant="contained" onClick={handleOpenCreate} sx={{ borderRadius: 2, textTransform: 'none', background: 'linear-gradient(135deg,#007AFF,#005FCC)' }}>
@@ -123,7 +110,7 @@ const ManageCoursesPage = () => {
                   <TableCell align="right">
                     <Box sx={{ display: 'inline-flex', gap: 1 }}>
                       <Button size="small" variant="outlined" onClick={() => handleOpenEdit(course)} sx={{ textTransform: 'none', borderRadius: 2 }}>Edit</Button>
-                      <Button size="small" variant="outlined" color="error" onClick={() => handleDelete(course)} disabled={isDeleting} sx={{ textTransform: 'none', borderRadius: 2 }}>Delete</Button>
+                      <Button size="small" variant="outlined" color="error" onClick={() => handleDelete(course)} disabled={deleteCourseMutation.isPending} sx={{ textTransform: 'none', borderRadius: 2 }}>Delete</Button>
                     </Box>
                   </TableCell>
                 </TableRow>
@@ -150,8 +137,8 @@ const ManageCoursesPage = () => {
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button onClick={() => setIsModalOpen(false)} sx={{ textTransform: 'none' }}>Cancel</Button>
-          <Button onClick={handleSave} disabled={isSaving} variant="contained" sx={{ textTransform: 'none', borderRadius: 2, background: 'linear-gradient(135deg,#007AFF,#005FCC)' }}>
-            {isSaving ? 'Saving...' : 'Save'}
+          <Button onClick={handleSave} disabled={saveCourseMutation.isPending} variant="contained" sx={{ textTransform: 'none', borderRadius: 2, background: 'linear-gradient(135deg,#007AFF,#005FCC)' }}>
+            {saveCourseMutation.isPending ? 'Saving...' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>

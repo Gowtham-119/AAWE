@@ -1,53 +1,111 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, CardHeader, Divider, FormControlLabel, Grid, Switch, TextField, Typography } from '@mui/material';
+import React, { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Box, Card, CardContent, CardHeader, Chip, Divider, FormControlLabel, Grid, Switch, TextField, Typography } from '@mui/material';
 import { getSystemSettings, saveSystemSettings } from '../../lib/academicDataApi';
+import { queryKeys } from '../../lib/queryKeys';
+import { STATIC_STALE_TIME_MS } from '../../lib/queryClient';
+import { toast } from 'sonner';
+import { useThemeMode } from '../../context/ThemeModeContext.js';
+
+const SAVE_DEBOUNCE_MS = 700;
+
+const parseBoolean = (value, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
+
+const parseNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return numeric;
+};
 
 const AdminSettingsPage = () => {
+  const { themeMode, toggleThemeMode } = useThemeMode();
+  const queryClient = useQueryClient();
   const [settings, setSettings] = useState({
-    allow_google_student: true,
-    allow_google_faculty: true,
-    allow_password_admin: true,
-    enforce_active_user_access: true,
     maintenance_mode: false,
-    support_contact: 'admin@university.edu',
+    current_semester: '2024-ODD',
+    allow_student_self_register: true,
+    max_attendance_edit_days: 7,
+    institution_name: 'AAWE',
+    support_email: 'admin@university.edu',
   });
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const [saveStatusByKey, setSaveStatusByKey] = useState({});
+  const debounceTimersRef = useRef({});
+
+  const { data: loadedSettings, isLoading } = useQuery({
+    queryKey: queryKeys.admin.settings(),
+    queryFn: getSystemSettings,
+    staleTime: STATIC_STALE_TIME_MS,
+  });
+
+  const saveSettingsMutation = useMutation({
+    mutationFn: ({ key, value }) => saveSystemSettings({ [key]: value }),
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.settings() });
+      setSaveStatusByKey((prev) => ({ ...prev, [variables.key]: 'saved' }));
+    },
+    onError: (error, variables) => {
+      console.error('Failed to save system settings:', error);
+      setSaveStatusByKey((prev) => ({ ...prev, [variables.key]: 'error' }));
+      toast.error(error?.message || `Failed to save ${variables.key}.`);
+    },
+  });
 
   useEffect(() => {
-    const loadSettings = async () => {
-      setIsLoading(true);
-      try {
-        const rows = await getSystemSettings();
-        setSettings((prev) => ({ ...prev, ...rows }));
-      } catch (error) {
-        console.error('Failed to load system settings:', error);
-        setMessage({ type: 'error', text: error?.message || 'Failed to load settings.' });
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    if (!loadedSettings) return;
 
-    loadSettings();
+    setSettings((prev) => ({
+      ...prev,
+      maintenance_mode: parseBoolean(loadedSettings.maintenance_mode, prev.maintenance_mode),
+      current_semester: String(loadedSettings.current_semester || prev.current_semester),
+      allow_student_self_register: parseBoolean(loadedSettings.allow_student_self_register, prev.allow_student_self_register),
+      max_attendance_edit_days: parseNumber(loadedSettings.max_attendance_edit_days, prev.max_attendance_edit_days),
+      institution_name: String(loadedSettings.institution_name || prev.institution_name),
+      support_email: String(loadedSettings.support_email || loadedSettings.support_contact || prev.support_email),
+    }));
+  }, [loadedSettings]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(debounceTimersRef.current).forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+    };
   }, []);
 
-  const handleToggle = (key) => (_event, checked) => {
-    setSettings((prev) => ({ ...prev, [key]: checked }));
+  const debouncedSave = (key, value) => {
+    if (debounceTimersRef.current[key]) {
+      window.clearTimeout(debounceTimersRef.current[key]);
+    }
+
+    setSaveStatusByKey((prev) => ({ ...prev, [key]: 'saving' }));
+    debounceTimersRef.current[key] = window.setTimeout(() => {
+      void saveSettingsMutation.mutateAsync({ key, value });
+    }, SAVE_DEBOUNCE_MS);
   };
 
-  const handleSave = async () => {
-    setIsSaving(true);
-    setMessage({ type: '', text: '' });
-    try {
-      await saveSystemSettings(settings);
-      setMessage({ type: 'success', text: 'Settings updated successfully.' });
-    } catch (error) {
-      console.error('Failed to save system settings:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to save settings.' });
-    } finally {
-      setIsSaving(false);
+  const updateSetting = (key, value) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+    debouncedSave(key, value);
+  };
+
+  const renderStatus = (key) => {
+    const status = saveStatusByKey[key] || 'idle';
+    if (status === 'saving') {
+      return <Chip size="small" label="Saving..." sx={{ ml: 1, height: 22 }} />;
     }
+    if (status === 'saved') {
+      return <Chip size="small" label="Saved ✓" color="success" sx={{ ml: 1, height: 22 }} />;
+    }
+    if (status === 'error') {
+      return <Chip size="small" label="Save failed" color="error" sx={{ ml: 1, height: 22 }} />;
+    }
+    return null;
   };
 
   const glassCardSx = {
@@ -64,15 +122,11 @@ const AdminSettingsPage = () => {
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>System configuration and preferences</Typography>
       </Box>
 
-      {message.text && (
-        <Alert severity={message.type === 'success' ? 'success' : 'error'}>{message.text}</Alert>
-      )}
-
       <Card sx={glassCardSx}>
         <CardHeader title="Authentication Settings" />
         <CardContent>
           <Typography sx={{ color: '#4b5563', fontSize: '0.925rem', mb: 2.5 }}>
-            Configure access rules, security policies, and integrations.
+            Configure runtime settings. Changes are auto-saved.
           </Typography>
 
           {isLoading && (
@@ -82,56 +136,82 @@ const AdminSettingsPage = () => {
           <Grid container spacing={1.5}>
             <Grid size={{ xs: 12 }}>
               <FormControlLabel
-                control={<Switch checked={Boolean(settings.allow_google_student)} onChange={handleToggle('allow_google_student')} />}
-                label="Allow Google login for Students"
+                control={<Switch checked={Boolean(settings.maintenance_mode)} onChange={(_event, checked) => updateSetting('maintenance_mode', checked)} />}
+                label={<Box sx={{ display: 'inline-flex', alignItems: 'center' }}>Maintenance mode {renderStatus('maintenance_mode')}</Box>}
               />
             </Grid>
             <Grid size={{ xs: 12 }}>
               <FormControlLabel
-                control={<Switch checked={Boolean(settings.allow_google_faculty)} onChange={handleToggle('allow_google_faculty')} />}
-                label="Allow Google login for Faculty"
+                control={<Switch checked={themeMode === 'dark'} onChange={toggleThemeMode} />}
+                label="Dark Mode (saved as personal preference)"
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                <Typography sx={{ fontWeight: 500 }}>Current Semester</Typography>
+                {renderStatus('current_semester')}
+              </Box>
+              <TextField
+                fullWidth
+                label="Current Semester"
+                helperText="Used as active semester filter in queries"
+                value={settings.current_semester || ''}
+                onChange={(event) => updateSetting('current_semester', event.target.value)}
               />
             </Grid>
             <Grid size={{ xs: 12 }}>
               <FormControlLabel
-                control={<Switch checked={Boolean(settings.allow_password_admin)} onChange={handleToggle('allow_password_admin')} />}
-                label="Allow password login for Admin"
+                control={<Switch checked={Boolean(settings.allow_student_self_register)} onChange={(_event, checked) => updateSetting('allow_student_self_register', checked)} />}
+                label={<Box sx={{ display: 'inline-flex', alignItems: 'center' }}>Allow Student Self Register (Google) {renderStatus('allow_student_self_register')}</Box>}
               />
             </Grid>
-            <Grid size={{ xs: 12 }}>
-              <FormControlLabel
-                control={<Switch checked={Boolean(settings.enforce_active_user_access)} onChange={handleToggle('enforce_active_user_access')} />}
-                label="Enforce active-user access control"
+            <Grid size={{ xs: 12, md: 6 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                <Typography sx={{ fontWeight: 500 }}>Max Attendance Edit Days</Typography>
+                {renderStatus('max_attendance_edit_days')}
+              </Box>
+              <TextField
+                fullWidth
+                type="number"
+                inputProps={{ min: 0, max: 60 }}
+                label="Max Attendance Edit Days"
+                helperText="Faculty can edit past attendance up to this limit"
+                value={settings.max_attendance_edit_days}
+                onChange={(event) => updateSetting('max_attendance_edit_days', Math.max(0, Number(event.target.value || 0)))}
               />
             </Grid>
-            <Grid size={{ xs: 12 }}>
-              <FormControlLabel
-                control={<Switch checked={Boolean(settings.maintenance_mode)} onChange={handleToggle('maintenance_mode')} />}
-                label="Maintenance mode"
+            <Grid size={{ xs: 12, md: 6 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                <Typography sx={{ fontWeight: 500 }}>Institution Name</Typography>
+                {renderStatus('institution_name')}
+              </Box>
+              <TextField
+                fullWidth
+                label="Institution Name"
+                helperText="Shown in Navbar and login header"
+                value={settings.institution_name || ''}
+                onChange={(event) => updateSetting('institution_name', event.target.value)}
               />
             </Grid>
             <Grid size={{ xs: 12, md: 7 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                <Typography sx={{ fontWeight: 500 }}>Support Email</Typography>
+                {renderStatus('support_email')}
+              </Box>
               <TextField
                 fullWidth
-                label="Support Contact"
-                value={settings.support_contact || ''}
-                onChange={(event) => setSettings((prev) => ({ ...prev, support_contact: event.target.value }))}
+                label="Support Email"
+                helperText="Shown on maintenance and error pages"
+                value={settings.support_email || ''}
+                onChange={(event) => updateSetting('support_email', event.target.value)}
               />
             </Grid>
           </Grid>
 
           <Divider sx={{ my: 2.5 }} />
-
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button
-              variant="contained"
-              onClick={handleSave}
-              disabled={isSaving}
-              sx={{ textTransform: 'none', borderRadius: 2, background: 'linear-gradient(135deg,#007AFF,#005FCC)' }}
-            >
-              {isSaving ? 'Saving...' : 'Save Settings'}
-            </Button>
-          </Box>
+          <Typography sx={{ color: '#6b7280', fontSize: '0.82rem' }}>
+            Changes are saved automatically after a short pause.
+          </Typography>
         </CardContent>
       </Card>
     </Box>

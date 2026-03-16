@@ -1,41 +1,43 @@
 import React from 'react';
-import { LayoutDashboard, Users, BookOpen, ClipboardCheck, FileText, Settings, ChevronLeft, GraduationCap, CalendarCheck, BarChart3, UserCircle, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, BookOpen, Building2, FileText, Settings, ChevronLeft, GraduationCap, CalendarCheck, BarChart3, UserCircle, LogOut, Bell, Clock3 } from 'lucide-react';
 import { Box, Button, IconButton, Typography } from '@mui/material';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.js';
+import { getSidebarMenuItems } from '../../lib/routing.js';
 
-export const Sidebar = ({ currentPage, onNavigate, collapsed, onToggleCollapse }) => {
+export const Sidebar = ({ collapsed, onToggleCollapse, onItemNavigate }) => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const isStudent = user?.role === 'student';
-  const isAdmin = user?.role === 'admin';
 
-  const getMenuItems = () => {
-    if (user?.role === 'admin') {
-      return [
-        { id: 'dashboard', label: 'Dashboard Overview', icon: LayoutDashboard },
-        { id: 'manage-users', label: 'Manage Users', icon: Users },
-        { id: 'manage-courses', label: 'Manage Courses', icon: BookOpen },
-        { id: 'reports', label: 'Reports', icon: BarChart3 },
-        { id: 'settings', label: 'Settings', icon: Settings },
-      ];
-    }
-    if (user?.role === 'faculty') {
-      return [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'attendance', label: 'Attendance Entry', icon: CalendarCheck },
-        { id: 'marks', label: 'Marks Entry', icon: BarChart3 },
-        { id: 'profile', label: 'Profile', icon: UserCircle },
-      ];
-    }
-    return [
-      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'courses', label: 'My Courses', icon: BookOpen },
-      { id: 'attendance', label: 'My Attendance', icon: CalendarCheck },
-      { id: 'marks', label: 'My Marks', icon: BarChart3 },
-      { id: 'profile', label: 'Profile', icon: UserCircle },
-    ];
+  const iconMap = {
+    dashboard: LayoutDashboard,
+    users: Users,
+    courses: BookOpen,
+    departments: Building2,
+    reports: BarChart3,
+    settings: Settings,
+    notices: Bell,
+    timetable: Clock3,
+    attendance: CalendarCheck,
+    marks: BarChart3,
+    profile: UserCircle,
   };
-  
-  const menuItems = getMenuItems();
+
+  const menuItems = getSidebarMenuItems(user?.role).map((item) => ({
+    ...item,
+    icon: iconMap[item.id] || FileText,
+  }));
+
+  const isPathActive = (path) => location.pathname === path;
+
+  const handleNavigate = (path) => {
+    navigate(path);
+    if (onItemNavigate) {
+      onItemNavigate();
+    }
+  };
 
   return (
     <Box
@@ -67,11 +69,11 @@ export const Sidebar = ({ currentPage, onNavigate, collapsed, onToggleCollapse }
       <Box component="nav" sx={{ flex: 1, p: 1.5, display: 'flex', flexDirection: 'column', gap: isStudent ? 1 : 0.75 }}>
         {menuItems.map(item => {
           const Icon = item.icon;
-          const isActive = currentPage === item.id;
+          const isActive = isPathActive(item.path);
           return (
             <Button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => handleNavigate(item.path)}
               title={collapsed ? item.label : undefined}
               sx={{
                 width: '100%',

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert,
   Avatar,
   Box,
   Button,
@@ -16,63 +16,90 @@ import {
   Grid,
   IconButton,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
+  TextField,
   Typography,
 } from '@mui/material';
 import { Pencil } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
-import { getFacultyProfileByEmail, updateFacultyDepartmentByEmail } from '../../lib/academicDataApi';
+import { getFacultyProfileByEmail, updateFacultyProfileByEmail } from '../../lib/academicDataApi';
+import { queryKeys } from '../../lib/queryKeys';
+import { STATIC_STALE_TIME_MS } from '../../lib/queryClient';
+import { toast } from 'sonner';
 
 const DEPARTMENT_OPTIONS = ['AG', 'CS', 'IT', 'ME', 'EE'];
 
 const FacultyProfilePage = () => {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [profile, setProfile] = useState({
     displayName: '',
     email: user?.email || '',
     department: '',
+    phone: '',
+    designation: '',
+    joinedDate: '',
+    completeness: 0,
   });
-  const [editDepartment, setEditDepartment] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    displayName: '',
+    department: '',
+    phone: '',
+    designation: '',
+    joinedDate: '',
+  });
   const [isEditOpen, setIsEditOpen] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
+
+  const normalizedEmail = (user?.email || '').trim().toLowerCase();
+
+  const { data: profileData, isLoading } = useQuery({
+    queryKey: queryKeys.faculty.profile(normalizedEmail),
+    queryFn: () => getFacultyProfileByEmail(normalizedEmail),
+    enabled: Boolean(normalizedEmail),
+    staleTime: STATIC_STALE_TIME_MS,
+  });
+
+  const updateProfileMutation = useMutation({
+    mutationFn: updateFacultyProfileByEmail,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.profile(normalizedEmail) });
+      toast.success('Profile updated successfully.');
+      setIsEditOpen(false);
+    },
+    onError: (error) => {
+      console.error('Failed to update faculty profile:', error);
+      toast.error(error?.message || 'Failed to update profile.');
+    },
+  });
 
   useEffect(() => {
-    const loadProfile = async () => {
-      if (!user?.email) return;
-      setIsLoading(true);
-      setMessage({ type: '', text: '' });
+    if (!normalizedEmail) return;
 
-      try {
-        const row = await getFacultyProfileByEmail(user.email);
+    if (!profileData) {
+      setProfile({
+        displayName: user?.name || 'Faculty',
+        email: normalizedEmail,
+        department: '',
+        phone: '',
+        designation: '',
+        joinedDate: '',
+        completeness: 20,
+      });
+      return;
+    }
 
-        if (!row) {
-          setProfile({
-            displayName: user?.name || 'Faculty',
-            email: user.email,
-            department: '',
-          });
-          setMessage({ type: 'error', text: 'Faculty profile not found.' });
-          return;
-        }
-
-        setProfile({
-          displayName: row.displayName || user?.name || 'Faculty',
-          email: row.email || user.email,
-          department: row.department || '',
-        });
-      } catch (error) {
-        console.error('Failed to load faculty profile:', error);
-        setMessage({ type: 'error', text: error?.message || 'Failed to load faculty profile.' });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadProfile();
-  }, [user?.email, user?.name]);
+    setProfile({
+      displayName: profileData.displayName || user?.name || 'Faculty',
+      email: profileData.email || normalizedEmail,
+      department: profileData.department || '',
+      phone: profileData.phone || '',
+      designation: profileData.designation || '',
+      joinedDate: profileData.joinedDate || '',
+      completeness: Number(profileData.completeness || 0),
+    });
+  }, [normalizedEmail, profileData, user?.name]);
 
   const initials = useMemo(() => {
     const name = (profile.displayName || '').trim();
@@ -86,53 +113,55 @@ const FacultyProfilePage = () => {
   }, [profile.displayName]);
 
   const openEdit = () => {
-    setEditDepartment(profile.department || '');
+    setEditForm({
+      displayName: profile.displayName || '',
+      department: profile.department || '',
+      phone: profile.phone || '',
+      designation: profile.designation || '',
+      joinedDate: profile.joinedDate || '',
+    });
     setIsEditOpen(true);
   };
 
   const closeEdit = () => {
-    if (isSaving) return;
+    if (updateProfileMutation.isPending) return;
     setIsEditOpen(false);
   };
 
-  const handleSaveDepartment = async () => {
-    setMessage({ type: '', text: '' });
-
-    if (!editDepartment) {
-      setMessage({ type: 'error', text: 'Please select a department.' });
+  const handleSaveProfile = async () => {
+    if (!editForm.department) {
+      toast.error('Please select a department.');
       return;
     }
 
-    setIsSaving(true);
     try {
-      const updated = await updateFacultyDepartmentByEmail({
+      const updated = await updateProfileMutation.mutateAsync({
         facultyEmail: profile.email,
-        department: editDepartment,
+        displayName: editForm.displayName,
+        department: editForm.department,
+        phone: editForm.phone,
+        designation: editForm.designation,
+        joinedDate: editForm.joinedDate,
       });
 
-      setProfile((prev) => ({ ...prev, department: updated.department }));
-      setMessage({ type: 'success', text: 'Department updated successfully.' });
-      setIsEditOpen(false);
-    } catch (error) {
-      console.error('Failed to update faculty department:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to update department.' });
-    } finally {
-      setIsSaving(false);
-    }
+      setProfile((prev) => ({
+        ...prev,
+        displayName: updated.displayName,
+        department: updated.department,
+        phone: updated.phone,
+        designation: updated.designation,
+        joinedDate: updated.joinedDate,
+        completeness: Number(updated.completeness || prev.completeness),
+      }));
+    } catch {}
   };
 
   return (
     <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
       <Box>
         <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827' }}>Faculty Profile</Typography>
-        <Typography sx={{ color: '#6b7280', mt: 0.5 }}>View and update your department</Typography>
+        <Typography sx={{ color: '#6b7280', mt: 0.5 }}>View and complete your profile information</Typography>
       </Box>
-
-      {message.text && (
-        <Alert severity={message.type === 'success' ? 'success' : 'error'}>
-          {message.text}
-        </Alert>
-      )}
 
       <Grid container spacing={3}>
         <Grid size={{ xs: 12, md: 4 }}>
@@ -146,6 +175,18 @@ const FacultyProfilePage = () => {
                 label={profile.department || 'Department not set'}
                 sx={{ mt: 1.5, backgroundColor: '#dbeafe', color: '#1d4ed8' }}
               />
+
+              <Box sx={{ mt: 2.5, width: '100%' }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.6 }}>
+                  <Typography sx={{ fontSize: '0.8rem', color: '#6b7280' }}>Profile Completeness</Typography>
+                  <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: '#111827' }}>{profile.completeness}% complete</Typography>
+                </Box>
+                <LinearProgress
+                  variant="determinate"
+                  value={profile.completeness}
+                  sx={{ height: 8, borderRadius: 999, backgroundColor: '#e5e7eb', '& .MuiLinearProgress-bar': { backgroundColor: profile.completeness >= 80 ? '#16a34a' : '#2563eb' } }}
+                />
+              </Box>
             </CardContent>
           </Card>
         </Grid>
@@ -174,6 +215,18 @@ const FacultyProfilePage = () => {
                   <Typography sx={{ fontSize: '0.75rem', color: '#6b7280' }}>Department</Typography>
                   <Typography sx={{ color: '#111827', fontWeight: 500 }}>{profile.department || 'N/A'}</Typography>
                 </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Typography sx={{ fontSize: '0.75rem', color: '#6b7280' }}>Phone</Typography>
+                  <Typography sx={{ color: '#111827', fontWeight: 500 }}>{profile.phone || 'N/A'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Typography sx={{ fontSize: '0.75rem', color: '#6b7280' }}>Designation</Typography>
+                  <Typography sx={{ color: '#111827', fontWeight: 500 }}>{profile.designation || 'N/A'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Typography sx={{ fontSize: '0.75rem', color: '#6b7280' }}>Joining Date</Typography>
+                  <Typography sx={{ color: '#111827', fontWeight: 500 }}>{profile.joinedDate || 'N/A'}</Typography>
+                </Grid>
               </Grid>
             </CardContent>
           </Card>
@@ -181,31 +234,73 @@ const FacultyProfilePage = () => {
       </Grid>
 
       <Dialog open={isEditOpen} onClose={closeEdit} fullWidth maxWidth="xs">
-        <DialogTitle>Update Department</DialogTitle>
+        <DialogTitle>Edit Profile</DialogTitle>
         <DialogContent>
-          <FormControl fullWidth sx={{ mt: 1 }}>
-            <InputLabel>Department</InputLabel>
-            <Select
-              value={editDepartment}
-              label="Department"
-              onChange={(event) => setEditDepartment(event.target.value)}
-              disabled={isSaving}
-            >
-              {DEPARTMENT_OPTIONS.map((department) => (
-                <MenuItem key={department} value={department}>{department}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <Grid container spacing={1.5} sx={{ mt: 0.2 }}>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Name"
+                value={editForm.displayName}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, displayName: event.target.value }))}
+                disabled={updateProfileMutation.isPending}
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <FormControl fullWidth>
+                <InputLabel>Department</InputLabel>
+                <Select
+                  value={editForm.department}
+                  label="Department"
+                  onChange={(event) => setEditForm((prev) => ({ ...prev, department: event.target.value }))}
+                  disabled={updateProfileMutation.isPending}
+                >
+                  {DEPARTMENT_OPTIONS.map((department) => (
+                    <MenuItem key={department} value={department}>{department}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Phone"
+                value={editForm.phone}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, phone: event.target.value }))}
+                disabled={updateProfileMutation.isPending}
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                label="Designation"
+                value={editForm.designation}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, designation: event.target.value }))}
+                disabled={updateProfileMutation.isPending}
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                fullWidth
+                type="date"
+                label="Joining Date"
+                value={editForm.joinedDate}
+                InputLabelProps={{ shrink: true }}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, joinedDate: event.target.value }))}
+                disabled={updateProfileMutation.isPending}
+              />
+            </Grid>
+          </Grid>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={closeEdit} disabled={isSaving} sx={{ textTransform: 'none' }}>Cancel</Button>
+          <Button onClick={closeEdit} disabled={updateProfileMutation.isPending} sx={{ textTransform: 'none' }}>Cancel</Button>
           <Button
             variant="contained"
-            onClick={handleSaveDepartment}
-            disabled={isSaving}
+            onClick={handleSaveProfile}
+            disabled={updateProfileMutation.isPending}
             sx={{ textTransform: 'none', backgroundColor: '#2563eb', '&:hover': { backgroundColor: '#1d4ed8' } }}
           >
-            {isSaving ? 'Updating...' : 'Update'}
+            {updateProfileMutation.isPending ? 'Updating...' : 'Update'}
           </Button>
         </DialogActions>
       </Dialog>

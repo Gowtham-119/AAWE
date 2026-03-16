@@ -1,28 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Box, Card, CardContent, CardHeader, Chip, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
-import { BookOpen, Lock, ShieldCheck, Users } from 'lucide-react';
+import { BookOpen, Clock, Lock, ShieldCheck, Users } from 'lucide-react';
 import { getAdminAccessOverview } from '../../lib/academicDataApi';
+import { LIVE_STALE_TIME_MS } from '../../lib/queryClient';
+import { queryKeys } from '../../lib/queryKeys';
 import { supabase } from '../../lib/supabaseClient.js';
+import EmptyState from '../ui/EmptyState.jsx';
+import NoticesPanel from '../ui/NoticesPanel.jsx';
 
 export const AdminDashboard = () => {
-  const [overview, setOverview] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const loadDashboard = async () => {
-    setIsLoading(true);
-    try {
-      const data = await getAdminAccessOverview();
-      setOverview(data);
-    } catch (error) {
-      console.error('Failed to load admin dashboard data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadDashboard();
-  }, []);
+  const queryClient = useQueryClient();
+  const { data: overview, isLoading } = useQuery({
+    queryKey: queryKeys.admin.accessOverview(),
+    queryFn: getAdminAccessOverview,
+    staleTime: LIVE_STALE_TIME_MS,
+  });
 
   useEffect(() => {
     const usersChannel = supabase
@@ -35,7 +28,7 @@ export const AdminDashboard = () => {
           table: 'users',
         },
         () => {
-          void loadDashboard();
+          void queryClient.invalidateQueries({ queryKey: queryKeys.admin.accessOverview() });
         }
       )
       .subscribe();
@@ -50,7 +43,7 @@ export const AdminDashboard = () => {
           table: 'department_courses',
         },
         () => {
-          void loadDashboard();
+          void queryClient.invalidateQueries({ queryKey: queryKeys.admin.accessOverview() });
         }
       )
       .subscribe();
@@ -65,7 +58,7 @@ export const AdminDashboard = () => {
           table: 'department_staff',
         },
         () => {
-          void loadDashboard();
+          void queryClient.invalidateQueries({ queryKey: queryKeys.admin.accessOverview() });
         }
       )
       .subscribe();
@@ -75,7 +68,7 @@ export const AdminDashboard = () => {
       void supabase.removeChannel(coursesChannel);
       void supabase.removeChannel(staffChannel);
     };
-  }, []);
+  }, [queryClient]);
 
   const stats = useMemo(() => {
     const summary = overview?.stats || {};
@@ -89,7 +82,13 @@ export const AdminDashboard = () => {
     ];
   }, [overview]);
 
-  const recentLogins = overview?.recentLogins || [];
+  const recentLogins = useMemo(
+    () => (overview?.recentLogins || []).map((row) => ({
+      ...row,
+      formattedLastLogin: (row.lastLoginAt || '').replace('T', ' ').slice(0, 16),
+    })),
+    [overview]
+  );
 
   const glassCardSx = {
     borderRadius: 3,
@@ -107,7 +106,7 @@ export const AdminDashboard = () => {
 
       <Grid container spacing={3}>
         {stats.map((stat, i) => (
-          <Grid key={i} size={{ xs: 12, md: 6, lg: 4 }}>
+          <Grid key={i} size={{ xs: 12, sm: 6, md: 4 }}>
             <Card sx={glassCardSx}>
               <CardContent sx={{ p: 3 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -124,6 +123,12 @@ export const AdminDashboard = () => {
         ))}
       </Grid>
 
+      <NoticesPanel
+        role="admin"
+        title="Admin Notices"
+        sx={glassCardSx}
+      />
+
       {isLoading && (
         <Typography sx={{ color: '#6b7280', fontSize: '0.875rem' }}>Loading dashboard data...</Typography>
       )}
@@ -131,7 +136,14 @@ export const AdminDashboard = () => {
       <Card sx={glassCardSx}>
         <CardHeader title="Recent Login Activity" />
         <CardContent>
-          <TableContainer>
+          {!recentLogins.length ? (
+            <EmptyState
+              icon={Clock}
+              title="No recent logins"
+              description="Login activity will appear here."
+            />
+          ) : (
+          <TableContainer sx={{ overflowX: 'auto' }}>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -143,16 +155,11 @@ export const AdminDashboard = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {!recentLogins.length && (
-                  <TableRow>
-                    <TableCell colSpan={5} sx={{ color: '#6b7280' }}>No login activity yet.</TableCell>
-                  </TableRow>
-                )}
                 {recentLogins.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell sx={{ fontWeight: 500, color: '#111827' }}>{row.email}</TableCell>
                     <TableCell>{row.role}</TableCell>
-                    <TableCell sx={{ color: '#6b7280' }}>{(row.lastLoginAt || '').replace('T', ' ').slice(0, 16)}</TableCell>
+                    <TableCell sx={{ color: '#6b7280' }}>{row.formattedLastLogin}</TableCell>
                     <TableCell>{row.loginCount}</TableCell>
                     <TableCell>
                       <Chip
@@ -169,6 +176,7 @@ export const AdminDashboard = () => {
               </TableBody>
             </Table>
           </TableContainer>
+          )}
         </CardContent>
       </Card>
     </Box>

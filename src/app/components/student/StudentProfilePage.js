@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert,
   Avatar,
   Box,
   Button,
@@ -20,10 +20,15 @@ import {
 import { Pencil } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { getStudentProfileByEmail, updateStudentProfileByEmail } from '../../lib/academicDataApi';
+import { STATIC_STALE_TIME_MS } from '../../lib/queryClient';
+import { queryKeys } from '../../lib/queryKeys';
 import { supabase } from '../../lib/supabaseClient.js';
+import { toast } from 'sonner';
 
 const StudentProfilePage = () => {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const normalizedEmail = (user?.email || '').trim().toLowerCase();
   const [profile, setProfile] = useState({
     name: '',
     registerNo: '',
@@ -32,9 +37,6 @@ const StudentProfilePage = () => {
     department: '',
   });
   const [originalEmail, setOriginalEmail] = useState(user?.email || '');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editProfile, setEditProfile] = useState({
     name: '',
@@ -57,67 +59,68 @@ const StudentProfilePage = () => {
     return match?.[1]?.toUpperCase() || '';
   };
 
-  useEffect(() => {
-    const loadProfile = async () => {
-      if (!user?.email) return;
+  const { data: profileData, isLoading } = useQuery({
+    queryKey: queryKeys.student.profile(normalizedEmail),
+    queryFn: () => getStudentProfileByEmail(normalizedEmail),
+    enabled: Boolean(normalizedEmail),
+    staleTime: STATIC_STALE_TIME_MS,
+  });
 
-      setIsLoading(true);
-      setMessage({ type: '', text: '' });
-
-      try {
-        const row = await getStudentProfileByEmail(user.email);
-
-        if (!row) {
-          setProfile((prev) => ({
-            ...prev,
-            email: user.email,
-            department: inferDepartmentFromEmail(user.email),
-          }));
-          setOriginalEmail(user.email);
-          return;
-        }
-
-        setProfile({
-          name: row.name || '',
-          registerNo: row.registerNo || '',
-          email: row.email || user.email,
-          mobileNo: row.mobileNo || '',
-          department: row.department || '',
-        });
-        setOriginalEmail(row.email || user.email);
-      } catch (error) {
-        console.error('Failed to load student profile:', error);
-        setMessage({ type: 'error', text: error?.message || 'Failed to load student profile.' });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadProfile();
-  }, [user?.email]);
+  const updateProfileMutation = useMutation({
+    mutationFn: updateStudentProfileByEmail,
+    onSuccess: async (updated) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.student.profile(normalizedEmail) });
+      setProfile((prev) => ({
+        ...prev,
+        name: updated.name,
+        registerNo: updated.registerNo,
+        email: updated.email,
+        mobileNo: updated.mobileNo,
+        department: updated.department,
+      }));
+      setOriginalEmail(updated.email);
+      toast.success('Profile updated successfully.');
+      setIsEditModalOpen(false);
+    },
+    onError: (error) => {
+      console.error('Failed to update student profile:', error);
+      toast.error(error?.message || 'Failed to update profile.');
+    },
+  });
 
   useEffect(() => {
-    if (!user?.email) return undefined;
+    if (!normalizedEmail) return;
+
+    if (!profileData) {
+      setProfile((prev) => ({
+        ...prev,
+        email: normalizedEmail,
+        department: inferDepartmentFromEmail(normalizedEmail),
+      }));
+      setOriginalEmail(normalizedEmail);
+      return;
+    }
+
+    setProfile({
+      name: profileData.name || '',
+      registerNo: profileData.registerNo || '',
+      email: profileData.email || normalizedEmail,
+      mobileNo: profileData.mobileNo || '',
+      department: profileData.department || '',
+    });
+    setOriginalEmail(profileData.email || normalizedEmail);
+  }, [normalizedEmail, profileData]);
+
+  useEffect(() => {
+    if (!normalizedEmail) return undefined;
 
     const channel = supabase
-      .channel(`student-profile-live-${user.email}`)
+      .channel(`student-profile-live-${normalizedEmail}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'students' },
-        async () => {
-          try {
-            const row = await getStudentProfileByEmail(user.email);
-            if (!row) return;
-            setProfile({
-              name: row.name || '',
-              registerNo: row.registerNo || '',
-              email: row.email || user.email,
-              mobileNo: row.mobileNo || '',
-              department: row.department || '',
-            });
-          } catch (error) {
-            console.error('Live profile refresh failed:', error);
-          }
+        () => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.student.profile(normalizedEmail) });
         }
       )
       .subscribe();
@@ -125,7 +128,7 @@ const StudentProfilePage = () => {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [user?.email]);
+  }, [normalizedEmail, queryClient]);
 
   const initials = useMemo(() => {
     const name = (profile.name || '').trim();
@@ -154,31 +157,28 @@ const StudentProfilePage = () => {
   };
 
   const handleCloseEditModal = () => {
-    if (isSaving) return;
+    if (updateProfileMutation.isPending) return;
     setIsEditModalOpen(false);
   };
 
   const handleSave = async () => {
-    setMessage({ type: '', text: '' });
-
     if (!editProfile.registerNo.trim()) {
-      setMessage({ type: 'error', text: 'Register number is required.' });
+      toast.error('Register number is required.');
       return;
     }
 
     if (!editProfile.email.trim()) {
-      setMessage({ type: 'error', text: 'Email is required.' });
+      toast.error('Email is required.');
       return;
     }
 
     if (!editProfile.mobileNo.trim()) {
-      setMessage({ type: 'error', text: 'Mobile number is required.' });
+      toast.error('Mobile number is required.');
       return;
     }
 
-    setIsSaving(true);
     try {
-      const updated = await updateStudentProfileByEmail({
+      await updateProfileMutation.mutateAsync({
         currentEmail: originalEmail,
         registerNo: editProfile.registerNo,
         name: editProfile.name,
@@ -186,24 +186,7 @@ const StudentProfilePage = () => {
         mobileNo: editProfile.mobileNo,
         department: editProfile.department,
       });
-
-      setProfile((prev) => ({
-        ...prev,
-        name: updated.name,
-        registerNo: updated.registerNo,
-        email: updated.email,
-        mobileNo: updated.mobileNo,
-        department: updated.department,
-      }));
-      setOriginalEmail(updated.email);
-      setMessage({ type: 'success', text: 'Profile updated successfully.' });
-      setIsEditModalOpen(false);
-    } catch (error) {
-      console.error('Failed to update student profile:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to update profile.' });
-    } finally {
-      setIsSaving(false);
-    }
+    } catch {}
   };
 
   return (
@@ -212,12 +195,6 @@ const StudentProfilePage = () => {
         <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#111827' }}>Profile</Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>View and update your profile</Typography>
       </Box>
-
-      {message.text && (
-        <Alert severity={message.type === 'success' ? 'success' : 'error'}>
-          {message.text}
-        </Alert>
-      )}
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 4 }}>
@@ -288,7 +265,7 @@ const StudentProfilePage = () => {
                 label="Register Number"
                 value={editProfile.registerNo}
                 onChange={handleEditChange('registerNo')}
-                disabled={isSaving}
+                disabled={updateProfileMutation.isPending}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
@@ -297,7 +274,7 @@ const StudentProfilePage = () => {
                 label="Mobile"
                 value={editProfile.mobileNo}
                 onChange={handleEditChange('mobileNo')}
-                disabled={isSaving}
+                disabled={updateProfileMutation.isPending}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
@@ -307,7 +284,7 @@ const StudentProfilePage = () => {
                 label="Email"
                 value={editProfile.email}
                 onChange={handleEditChange('email')}
-                disabled={isSaving}
+                disabled={updateProfileMutation.isPending}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
@@ -316,7 +293,7 @@ const StudentProfilePage = () => {
                 label="Name"
                 value={editProfile.name}
                 onChange={handleEditChange('name')}
-                disabled={isSaving}
+                disabled={updateProfileMutation.isPending}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
@@ -325,22 +302,22 @@ const StudentProfilePage = () => {
                 label="Department"
                 value={editProfile.department}
                 onChange={handleEditChange('department')}
-                disabled={isSaving}
+                disabled={updateProfileMutation.isPending}
               />
             </Grid>
           </Grid>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={handleCloseEditModal} disabled={isSaving} sx={{ textTransform: 'none' }}>
+          <Button onClick={handleCloseEditModal} disabled={updateProfileMutation.isPending} sx={{ textTransform: 'none' }}>
             Cancel
           </Button>
           <Button
             variant="contained"
             onClick={handleSave}
-            disabled={isSaving}
+            disabled={updateProfileMutation.isPending}
             sx={{ textTransform: 'none', backgroundColor: '#2563eb', '&:hover': { backgroundColor: '#1d4ed8' } }}
           >
-            {isSaving ? 'Updating...' : 'Update Profile'}
+            {updateProfileMutation.isPending ? 'Updating...' : 'Update Profile'}
           </Button>
         </DialogActions>
       </Dialog>

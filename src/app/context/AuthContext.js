@@ -1,8 +1,10 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Snackbar } from '@mui/material';
 import { supabase } from '../lib/supabaseClient';
 
 const GOOGLE_POPUP_SUCCESS = 'google-oauth-success';
 const GOOGLE_POPUP_ERROR = 'google-oauth-error';
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
 
 const ROLE_DISPLAY_NAMES = {
   admin: 'Admin User',
@@ -10,20 +12,12 @@ const ROLE_DISPLAY_NAMES = {
   student: 'Alex Thompson',
 };
 
-const EMAIL_ROLE_OVERRIDES = {
-  'gowtham25m@gmail.com': 'faculty',
-  'soundharraj122005@gmail.com': 'faculty',
-};
-
-const toEmailSearchPattern = (email) => `${(email || '').trim().toLowerCase()}%`;
-
 const resolveProfile = async (authUser) => {
   if (!authUser?.email) {
     return { role: null, name: null, department: null };
   }
 
-  const normalizedEmail = authUser.email.toLowerCase();
-  const forcedRole = EMAIL_ROLE_OVERRIDES[normalizedEmail] || null;
+  const normalizedEmail = (authUser.email || '').trim().toLowerCase();
 
   const metadataRole = authUser.user_metadata?.role || authUser.app_metadata?.role || null;
   const metadataName = authUser.user_metadata?.name || authUser.user_metadata?.full_name || null;
@@ -36,7 +30,7 @@ const resolveProfile = async (authUser) => {
   const { data, error } = await supabase
     .from('user_profiles')
     .select('role, display_name, department')
-    .ilike('email', toEmailSearchPattern(authUser.email))
+    .eq('email', normalizedEmail)
     .maybeSingle();
 
   if (!error && data) {
@@ -48,7 +42,7 @@ const resolveProfile = async (authUser) => {
   const { data: usersData, error: usersError } = await supabase
     .from('users')
     .select('role')
-    .ilike('email', toEmailSearchPattern(authUser.email))
+    .eq('email', normalizedEmail)
     .maybeSingle();
 
   if (!usersError && usersData) {
@@ -56,7 +50,7 @@ const resolveProfile = async (authUser) => {
   }
 
   return {
-    role: forcedRole || usersTableRole || profileRole || metadataRole,
+    role: usersTableRole || profileRole || metadataRole,
     name: profileName || metadataName,
     department: profileDepartment,
   };
@@ -100,22 +94,6 @@ const resolveAdminIdentifierToEmail = async (identifier) => {
   return (usersData?.email || '').trim().toLowerCase();
 };
 
-const inferRoleFromEmail = (email) => {
-  const normalized = (email || '').trim().toLowerCase();
-  if (!normalized) return null;
-
-  if (
-    normalized.includes('faculty') ||
-    normalized.includes('staff') ||
-    normalized.startsWith('dr.') ||
-    normalized.startsWith('dr')
-  ) {
-    return 'faculty';
-  }
-
-  return 'student';
-};
-
 const isPermissionError = (error) => {
   const status = Number(error?.status || 0);
   const message = String(error?.message || '').toLowerCase();
@@ -128,21 +106,23 @@ const isPermissionError = (error) => {
   );
 };
 
-const buildUser = async (authUser, fallbackRole = null) => {
+const buildUser = async (authUser) => {
   if (!authUser) return null;
 
+  const normalizedEmail = (authUser.email || '').trim().toLowerCase();
+
   const { role, name, department } = await resolveProfile(authUser);
-  const normalizedRole = role || fallbackRole || 'student';
+  const normalizedRole = role || null;
 
   const { data: usersRow } = await supabase
     .from('users')
     .select('is_active, login_count, last_login_at')
-    .ilike('email', toEmailSearchPattern(authUser.email))
+    .eq('email', normalizedEmail)
     .maybeSingle();
 
   return {
     id: authUser.id,
-    email: authUser.email,
+    email: normalizedEmail,
     role: normalizedRole,
     name: name || ROLE_DISPLAY_NAMES[normalizedRole] || 'User',
     department: (department || '').trim().toUpperCase() || null,
@@ -161,7 +141,7 @@ const recordLoginSuccess = async ({ email, role }) => {
   const { data: existingRow, error: existingError } = await supabase
     .from('users')
     .select('email, login_count, is_active')
-    .ilike('email', toEmailSearchPattern(normalizedEmail))
+    .eq('email', normalizedEmail)
     .maybeSingle();
 
   if (existingError) {
@@ -200,7 +180,7 @@ const recordLoginSuccess = async ({ email, role }) => {
       last_login_at: nowIso,
       updated_at: nowIso,
     })
-    .ilike('email', toEmailSearchPattern(normalizedEmail));
+    .eq('email', normalizedEmail);
 
   if (updateError && !isPermissionError(updateError)) {
     throw updateError;
@@ -240,38 +220,52 @@ export const AuthProvider = ({ children }) => {
   const [authLoading, setAuthLoading] = useState(true);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState('System is under maintenance. Please try again later.');
+  const [institutionName, setInstitutionName] = useState('AAWE');
+  const [supportEmail, setSupportEmail] = useState('admin@university.edu');
+  const [sessionExpiredToastOpen, setSessionExpiredToastOpen] = useState(false);
+  const inactivityTimerRef = useRef(null);
 
   const fetchMaintenanceStatus = async () => {
     const { data, error } = await supabase
       .from('system_settings')
       .select('setting_key, setting_value')
-      .in('setting_key', ['maintenance_mode', 'maintenance_message', 'support_contact']);
+      .in('setting_key', ['maintenance_mode', 'maintenance_message', 'support_email', 'support_contact', 'institution_name']);
 
     if (error) {
       return {
         enabled: false,
         message: 'System is under maintenance. Please try again later.',
+        institutionName: 'AAWE',
+        supportEmail: 'admin@university.edu',
       };
     }
 
     const settingsMap = new Map((data || []).map((row) => [row.setting_key, row.setting_value]));
     const enabled = Boolean(settingsMap.get('maintenance_mode'));
     const configuredMessage = settingsMap.get('maintenance_message');
-    const supportContact = settingsMap.get('support_contact');
+    const configuredSupportEmail = settingsMap.get('support_email') || settingsMap.get('support_contact');
+    const configuredInstitutionName = settingsMap.get('institution_name');
 
     const message = configuredMessage
       ? String(configuredMessage)
-      : supportContact
-        ? `System is under maintenance. Please contact ${supportContact}.`
+      : configuredSupportEmail
+        ? `System is under maintenance. Please contact ${configuredSupportEmail}.`
         : 'System is under maintenance. Please try again later.';
 
-    return { enabled, message };
+    return {
+      enabled,
+      message,
+      institutionName: configuredInstitutionName ? String(configuredInstitutionName) : 'AAWE',
+      supportEmail: configuredSupportEmail ? String(configuredSupportEmail) : 'admin@university.edu',
+    };
   };
 
   const enforceMaintenanceGate = async (expectedRole) => {
     const status = await fetchMaintenanceStatus();
     setMaintenanceMode(status.enabled);
     setMaintenanceMessage(status.message);
+    setInstitutionName(status.institutionName || 'AAWE');
+    setSupportEmail(status.supportEmail || 'admin@university.edu');
 
     const normalizedRole = (expectedRole || '').trim().toLowerCase();
     if (status.enabled && normalizedRole !== 'admin') {
@@ -283,12 +277,6 @@ export const AuthProvider = ({ children }) => {
     let isMounted = true;
 
     const initializeAuth = async () => {
-      const maintenance = await fetchMaintenanceStatus();
-      if (isMounted) {
-        setMaintenanceMode(maintenance.enabled);
-        setMaintenanceMessage(maintenance.message);
-      }
-
       const authError = parseAuthErrorFromUrl();
       const isPopup = typeof window !== 'undefined' && window.opener && window.opener !== window;
 
@@ -298,18 +286,31 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      const { data } = await supabase.auth.getSession();
-      const sessionUser = await buildUser(data.session?.user || null);
+      try {
+        const [{ data: sessionData }, maintenance] = await Promise.all([
+          supabase.auth.getSession(),
+          fetchMaintenanceStatus(),
+        ]);
 
-      if (isPopup && sessionUser) {
-        window.opener.postMessage({ type: GOOGLE_POPUP_SUCCESS }, window.location.origin);
-        window.close();
-        return;
-      }
+        const sessionUser = await buildUser(sessionData.session?.user || null);
 
-      if (isMounted) {
-        setUser(sessionUser);
-        setAuthLoading(false);
+        if (isPopup && sessionUser) {
+          window.opener.postMessage({ type: GOOGLE_POPUP_SUCCESS }, window.location.origin);
+          window.close();
+          return;
+        }
+
+        if (isMounted) {
+          setMaintenanceMode(maintenance.enabled);
+          setMaintenanceMessage(maintenance.message);
+          setInstitutionName(maintenance.institutionName || 'AAWE');
+          setSupportEmail(maintenance.supportEmail || 'admin@university.edu');
+          setUser(sessionUser);
+        }
+      } finally {
+        if (isMounted) {
+          setAuthLoading(false);
+        }
       }
     };
 
@@ -332,6 +333,48 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
+  useEffect(() => {
+    const clearInactivityTimer = () => {
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+    };
+
+    const handleInactivityTimeout = async () => {
+      try {
+        await supabase.auth.signOut();
+        setUser(null);
+        setSessionExpiredToastOpen(true);
+      } catch (error) {
+        console.error('Failed to sign out after inactivity timeout:', error);
+      }
+    };
+
+    const resetInactivityTimer = () => {
+      clearInactivityTimer();
+      inactivityTimerRef.current = window.setTimeout(() => {
+        void handleInactivityTimeout();
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    if (!user) {
+      clearInactivityTimer();
+      return undefined;
+    }
+
+    const eventOptions = { passive: true };
+    window.addEventListener('click', resetInactivityTimer, eventOptions);
+    window.addEventListener('keydown', resetInactivityTimer);
+    resetInactivityTimer();
+
+    return () => {
+      clearInactivityTimer();
+      window.removeEventListener('click', resetInactivityTimer, eventOptions);
+      window.removeEventListener('keydown', resetInactivityTimer);
+    };
+  }, [user]);
+
   const login = async (email, password, expectedRole) => {
     await enforceMaintenanceGate(expectedRole);
 
@@ -351,7 +394,12 @@ export const AuthProvider = ({ children }) => {
       throw new Error(error.message);
     }
 
-    const resolvedUser = await buildUser(data.user || null, expectedRole || null);
+    const resolvedUser = await buildUser(data.user || null);
+
+    if (!resolvedUser?.role) {
+      await supabase.auth.signOut();
+      throw new Error('No role found for this email in users table.');
+    }
 
     if (resolvedUser?.isActive === false) {
       await supabase.auth.signOut();
@@ -408,15 +456,7 @@ export const AuthProvider = ({ children }) => {
         return { ok: false };
       }
 
-      let resolvedUser = await buildUser(sessionUser || null);
-
-      if (isCombinedFacultyStudentMode && (!resolvedUser?.role || resolvedUser.role === 'admin')) {
-        const inferredRole = inferRoleFromEmail(resolvedUser?.email || sessionUser?.email || '');
-        resolvedUser = {
-          ...resolvedUser,
-          role: inferredRole || resolvedUser?.role || 'student',
-        };
-      }
+      const resolvedUser = await buildUser(sessionUser || null);
 
       if (!resolvedUser?.role) {
         await supabase.auth.signOut();
@@ -441,14 +481,14 @@ export const AuthProvider = ({ children }) => {
       try {
         await recordLoginSuccess({ email: resolvedUser?.email, role: resolvedUser?.role });
         setUser(resolvedUser);
-        return { ok: true };
+        return { ok: true, user: resolvedUser };
       } catch (recordError) {
         await supabase.auth.signOut();
         return { ok: false, error: recordError?.message || 'Failed to update login activity.' };
       }
     };
 
-    await new Promise((resolve, reject) => {
+    const resolvedUser = await new Promise((resolve, reject) => {
       let finished = false;
 
       const {
@@ -461,7 +501,7 @@ export const AuthProvider = ({ children }) => {
             settle(() => reject(new Error(resolution.error || 'Google sign-in failed.')));
             return;
           }
-          settle(resolve);
+          settle(() => resolve(resolution.user));
         })();
       });
 
@@ -494,7 +534,7 @@ export const AuthProvider = ({ children }) => {
             settle(() => reject(new Error(resolution.error || 'Google sign-in failed.')));
             return;
           }
-          settle(resolve);
+          settle(() => resolve(resolution.user));
         }
       };
 
@@ -502,7 +542,7 @@ export const AuthProvider = ({ children }) => {
         const { data: sessionData } = await supabase.auth.getSession();
         const resolution = await resolveGoogleSessionUser(sessionData.session?.user || null);
         if (resolution.ok) {
-          settle(resolve);
+          settle(() => resolve(resolution.user));
         }
       }, 1000);
 
@@ -517,6 +557,8 @@ export const AuthProvider = ({ children }) => {
 
       window.addEventListener('message', handleMessage);
     });
+
+    return resolvedUser;
   };
 
   const logout = async () => {
@@ -525,13 +567,38 @@ export const AuthProvider = ({ children }) => {
   };
 
   const value = useMemo(
-    () => ({ user, authLoading, login, loginWithGoogle, logout, maintenanceMode, maintenanceMessage }),
-    [user, authLoading, maintenanceMode, maintenanceMessage]
+    () => ({
+      user,
+      authLoading,
+      login,
+      loginWithGoogle,
+      logout,
+      maintenanceMode,
+      maintenanceMessage,
+      institutionName,
+      supportEmail,
+    }),
+    [user, authLoading, maintenanceMode, maintenanceMessage, institutionName, supportEmail]
   );
 
   return (
     <AuthContext.Provider value={value}>
       {children}
+      <Snackbar
+        open={sessionExpiredToastOpen}
+        autoHideDuration={5000}
+        onClose={() => setSessionExpiredToastOpen(false)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSessionExpiredToastOpen(false)}
+          severity="warning"
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          Session expired due to inactivity. Please sign in again.
+        </Alert>
+      </Snackbar>
     </AuthContext.Provider>
   );
 };

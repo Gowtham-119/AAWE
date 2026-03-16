@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -16,27 +18,34 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  TableContainer,
   TextField,
   Typography,
 } from '@mui/material';
-import { ArrowUpDown, Search } from 'lucide-react';
+import { ArrowUpDown, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import {
   getStudents,
   getAttendanceForCourseDate,
+  getSystemSettings,
   saveAttendanceForCourseDate,
 } from '../../lib/academicDataApi';
+import { LIVE_STALE_TIME_MS } from '../../lib/queryClient';
+import { queryKeys } from '../../lib/queryKeys';
 import { supabase } from '../../lib/supabaseClient.js';
+import { toast } from 'sonner';
+import EmptyState from '../ui/EmptyState.jsx';
 
 export const AttendancePage = () => {
   const { user } = useAuth();
-  const [selectedCourse, setSelectedCourse] = useState('CS301');
+  const queryClient = useQueryClient();
+  const [selectedCourse, setSelectedCourse] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedDepartment, setSelectedDepartment] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [isLoadingExisting, setIsLoadingExisting] = useState(false);
-  const [isLoadingStudents, setIsLoadingStudents] = useState(false);
-  const [pendingUpdates, setPendingUpdates] = useState({});
+  const [isEditingExisting, setIsEditingExisting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSummary, setSaveSummary] = useState('');
   const [page, setPage] = useState(0);
 
   const courses = [
@@ -50,6 +59,30 @@ export const AttendancePage = () => {
 
   const rowsPerPage = 150;
 
+  const { data: systemSettings = {} } = useQuery({
+    queryKey: ['system-settings'],
+    queryFn: getSystemSettings,
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const maxAttendanceEditDays = Math.max(0, Number(systemSettings?.max_attendance_edit_days || 7));
+
+  const toDateString = (date) => {
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const todayString = toDateString(new Date());
+  const minDateString = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - maxAttendanceEditDays);
+    return toDateString(date);
+  }, [maxAttendanceEditDays]);
+
   const extractDepartmentCode = (email) => {
     const match = (email || '').trim().toLowerCase().match(/\.([a-z]{2})\d*@/);
     return match?.[1]?.toUpperCase() || 'NA';
@@ -61,24 +94,34 @@ export const AttendancePage = () => {
     return student.departmentCode || 'NA';
   };
 
-  useEffect(() => {
-    const loadStudents = async () => {
-      setIsLoadingStudents(true);
-      try {
-        const studentRows = await getStudents();
-        setStudents(studentRows);
-      } catch (error) {
-        console.error('Failed to load students:', error);
-        alert(`Failed to load students: ${error?.message || 'Check students table setup in Supabase.'}`);
-      } finally {
-        setIsLoadingStudents(false);
-      }
-    };
+  const { data: allStudents = [], isLoading: isLoadingStudents } = useQuery({
+    queryKey: ['faculty-students-all'],
+    staleTime: LIVE_STALE_TIME_MS,
+    queryFn: async () => {
+      const studentRows = [];
+      let nextPage = 1;
+      const pageSize = 500;
+      let total = 0;
 
-    loadStudents();
-  }, []);
+      do {
+        const result = await getStudents({ page: nextPage, pageSize });
+        total = result.total || 0;
+        studentRows.push(...(result.data || []));
+        nextPage += 1;
+      } while (studentRows.length < total);
 
-  const selectedCourseDetails = courses.find((course) => course.code === selectedCourse) || courses[0];
+      return studentRows;
+    },
+  });
+
+  const { data: existingRows = [], isLoading: isLoadingExisting } = useQuery({
+    queryKey: queryKeys.faculty.attendanceByCourseDate(selectedCourse, selectedDate),
+    queryFn: () => getAttendanceForCourseDate({ courseCode: selectedCourse, selectedDate }),
+    enabled: Boolean(selectedCourse && selectedDate),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const selectedCourseDetails = courses.find((course) => course.code === selectedCourse) || null;
 
   const departmentOptions = useMemo(() => {
     const dynamicCodes = new Set(
@@ -111,47 +154,37 @@ export const AttendancePage = () => {
   }, [students, selectedDepartment, searchTerm]);
 
   const pagedStudents = filteredStudents.slice(page * rowsPerPage, (page + 1) * rowsPerPage);
+  const hasExistingRecords = existingRows.length > 0;
+  const isLockedForEdit = hasExistingRecords && !isEditingExisting;
 
   useEffect(() => {
     setPage(0);
   }, [selectedDepartment, searchTerm]);
 
   useEffect(() => {
-    const loadExistingAttendance = async () => {
-      if (!students.length) return;
+    if (!selectedDate) return;
+    if (selectedDate < minDateString) {
+      setSelectedDate(minDateString);
+    }
+    if (selectedDate > todayString) {
+      setSelectedDate(todayString);
+    }
+  }, [minDateString, selectedDate, todayString]);
 
-      setIsLoadingExisting(true);
+  useEffect(() => {
+    setIsEditingExisting(false);
+  }, [selectedCourse, selectedDate]);
 
-      try {
-        const existingRows = await getAttendanceForCourseDate({
-          courseCode: selectedCourse,
-          selectedDate,
-        });
-
-        if (!existingRows.length) return;
-
-        const attendanceByEmail = new Map(
-          existingRows.map((row) => [row.student_email, row.is_present])
-        );
-
-        setStudents((prev) =>
-          prev.map((student) => {
-            if (!attendanceByEmail.has(student.email)) return student;
-            return {
-              ...student,
-              attendance: Boolean(attendanceByEmail.get(student.email)),
-            };
-          })
-        );
-      } catch (error) {
-        console.error('Failed to load existing attendance:', error);
-      } finally {
-        setIsLoadingExisting(false);
-      }
-    };
-
-    loadExistingAttendance();
-  }, [selectedCourse, selectedDate, students.length]);
+  useEffect(() => {
+    const attendanceByEmail = new Map(existingRows.map((row) => [row.student_email, row.is_present]));
+    const mergedStudents = (allStudents || []).map((student) => ({
+      ...student,
+      attendance: attendanceByEmail.has(student.email)
+        ? Boolean(attendanceByEmail.get(student.email))
+        : Boolean(student.attendance),
+    }));
+    setStudents(mergedStudents);
+  }, [allStudents, existingRows]);
 
   useEffect(() => {
     if (!selectedCourse || !selectedDate) return undefined;
@@ -166,22 +199,10 @@ export const AttendancePage = () => {
           table: 'attendance_records',
           filter: `course_code=eq.${selectedCourse}`,
         },
-        async () => {
-          try {
-            const existingRows = await getAttendanceForCourseDate({ courseCode: selectedCourse, selectedDate });
-            const attendanceByEmail = new Map(existingRows.map((row) => [row.student_email, row.is_present]));
-            setStudents((prev) =>
-              prev.map((student) => {
-                if (!attendanceByEmail.has(student.email)) return student;
-                return {
-                  ...student,
-                  attendance: Boolean(attendanceByEmail.get(student.email)),
-                };
-              })
-            );
-          } catch (error) {
-            console.error('Realtime attendance sync failed:', error);
-          }
+        () => {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.faculty.attendanceByCourseDate(selectedCourse, selectedDate),
+          });
         }
       )
       .subscribe();
@@ -189,33 +210,54 @@ export const AttendancePage = () => {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [selectedCourse, selectedDate]);
+  }, [queryClient, selectedCourse, selectedDate]);
 
-  const updateStudentAttendance = async (student, isPresent) => {
-    if (!student || pendingUpdates[student.id] || student.attendance === isPresent) return;
-
-    const previousValue = Boolean(student.attendance);
-
-    setPendingUpdates((prev) => ({ ...prev, [student.id]: true }));
+  const updateStudentAttendance = (student, isPresent) => {
+    if (!student || isLockedForEdit || student.attendance === isPresent) return;
     setStudents((prev) => prev.map((s) => (s.id === student.id ? { ...s, attendance: isPresent } : s)));
+  };
+
+  const updateBulkAttendance = (isPresent) => {
+    if (isLockedForEdit || !filteredStudents.length) return;
+    const targetIds = new Set(filteredStudents.map((student) => student.id));
+    setStudents((prev) => prev.map((student) => (
+      targetIds.has(student.id) ? { ...student, attendance: isPresent } : student
+    )));
+    toast.success(isPresent ? 'All filtered students marked present.' : 'All filtered students marked absent.');
+  };
+
+  const handleSaveAttendance = async () => {
+    setSaveSummary('');
+
+    if (!selectedCourseDetails) {
+      toast.error('Please select a course before saving attendance.');
+      return;
+    }
 
     try {
+      setIsSaving(true);
       await saveAttendanceForCourseDate({
-        students: [{ ...student, attendance: isPresent }],
+        students,
         selectedCourse: selectedCourseDetails,
         selectedDate,
         facultyEmail: user?.email,
+        actorEmail: user?.email,
+        actorRole: user?.role,
       });
+
+      const total = filteredStudents.length;
+      const present = presentCount;
+      const percentage = total ? ((present / total) * 100).toFixed(1) : '0.0';
+
+      setSaveSummary(`Attendance saved for ${selectedDate} — ${present}/${total} present (${percentage}%).`);
+      toast.success(`Attendance saved for ${total} students.`);
+      setIsEditingExisting(false);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.attendanceByCourseDate(selectedCourse, selectedDate) });
     } catch (error) {
-      console.error('Failed to update attendance instantly:', error);
-      setStudents((prev) => prev.map((s) => (s.id === student.id ? { ...s, attendance: previousValue } : s)));
-      alert(`Failed to update attendance: ${error?.message || 'Please try again.'}`);
+      console.error('Failed to save attendance:', error);
+      toast.error(error?.message || 'Failed to save attendance.');
     } finally {
-      setPendingUpdates((prev) => {
-        const next = { ...prev };
-        delete next[student.id];
-        return next;
-      });
+      setIsSaving(false);
     }
   };
 
@@ -232,6 +274,8 @@ export const AttendancePage = () => {
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Mark and manage student attendance</Typography>
       </Box>
 
+      {!!saveSummary && <Alert severity="success">{saveSummary}</Alert>}
+
       <Card>
         <CardContent sx={{ p: 3 }}>
           <Grid container spacing={2}>
@@ -239,6 +283,9 @@ export const AttendancePage = () => {
               <FormControl fullWidth>
                 <InputLabel>Select Course</InputLabel>
                 <Select value={selectedCourse} label="Select Course" onChange={(e) => setSelectedCourse(e.target.value)}>
+                  <MenuItem value="">
+                    <em>Select a course</em>
+                  </MenuItem>
                   {courses.map((course) => (
                     <MenuItem key={course.code} value={course.code}>
                       {course.code} - {course.name}
@@ -254,6 +301,8 @@ export const AttendancePage = () => {
                 label="Select Date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
+                inputProps={{ min: minDateString, max: todayString }}
+                helperText={`Can edit up to ${maxAttendanceEditDays} day(s) back`}
                 InputLabelProps={{ shrink: true }}
               />
             </Grid>
@@ -272,49 +321,54 @@ export const AttendancePage = () => {
                 }}
               >
                 <Typography sx={{ color: '#1d4ed8', fontWeight: 600, textAlign: 'center' }}>
-                  Attendance updates are saved instantly.
+                  Select date, mark attendance, then save.
                 </Typography>
               </Box>
             </Grid>
             <Grid size={{ xs: 12, md: 4 }} />
           </Grid>
+
+          {hasExistingRecords && (
+            <Alert
+              severity="info"
+              sx={{ mt: 2 }}
+              action={(
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setIsEditingExisting(true)}
+                  disabled={isEditingExisting}
+                  sx={{ textTransform: 'none' }}
+                >
+                  {isEditingExisting ? 'Editing Enabled' : 'Edit'}
+                </Button>
+              )}
+            >
+              Attendance already submitted for this date and course. Click Edit to unlock changes.
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent>
-              <Typography sx={{ fontSize: '0.875rem', color: '#4b5563' }}>Total Students</Typography>
-              <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: '#111827' }}>{filteredStudents.length}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent>
-              <Typography sx={{ fontSize: '0.875rem', color: '#4b5563' }}>Present</Typography>
-              <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: '#16a34a' }}>{presentCount}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent>
-              <Typography sx={{ fontSize: '0.875rem', color: '#4b5563' }}>Absent</Typography>
-              <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: '#dc2626' }}>{absentCount}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent>
-              <Typography sx={{ fontSize: '0.875rem', color: '#4b5563' }}>Attendance Rate</Typography>
-              <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: '#2563eb' }}>{attendancePercentage}%</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
+      <Box
+        sx={{
+          px: 2,
+          py: 1.25,
+          borderRadius: 2,
+          backgroundColor: '#f8fafc',
+          border: '1px solid #e2e8f0',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 1,
+        }}
+      >
+        <Typography sx={{ fontWeight: 700, color: '#111827' }}>
+          {presentCount} Present | {absentCount} Absent | {filteredStudents.length} Total
+        </Typography>
+        <Typography sx={{ color: '#2563eb', fontWeight: 600 }}>{attendancePercentage}% Attendance</Typography>
+      </Box>
 
       <Card>
         <CardContent>
@@ -369,9 +423,40 @@ export const AttendancePage = () => {
                   </FormControl>
                 </Box>
               </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                  <Button
+                    variant="outlined"
+                    color="success"
+                    onClick={() => updateBulkAttendance(true)}
+                    disabled={isLockedForEdit || !filteredStudents.length}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    Mark All Present
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    onClick={() => updateBulkAttendance(false)}
+                    disabled={isLockedForEdit || !filteredStudents.length}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    Mark All Absent
+                  </Button>
+                  <Button
+                    variant="contained"
+                    onClick={handleSaveAttendance}
+                    disabled={!selectedCourse || isLockedForEdit || isSaving}
+                    sx={{ textTransform: 'none', backgroundColor: '#2563eb', '&:hover': { backgroundColor: '#1d4ed8' } }}
+                  >
+                    {isSaving ? 'Saving...' : 'Save Attendance'}
+                  </Button>
+                </Box>
+              </Grid>
             </Grid>
           </Box>
 
+          <TableContainer sx={{ overflowX: 'auto' }}>
           <Table>
             <TableHead>
               <TableRow>
@@ -401,7 +486,11 @@ export const AttendancePage = () => {
               {!isLoadingExisting && !isLoadingStudents && !pagedStudents.length && (
                 <TableRow>
                   <TableCell colSpan={6} sx={{ color: '#6b7280' }}>
-                    No students match the current search/filter.
+                    <EmptyState
+                      icon={Users}
+                      title="No students found"
+                      description="Assign students to this course first."
+                    />
                   </TableCell>
                 </TableRow>
               )}
@@ -432,7 +521,7 @@ export const AttendancePage = () => {
                       <Button
                         onClick={() => updateStudentAttendance(student, true)}
                         variant={student.attendance ? 'contained' : 'text'}
-                        disabled={Boolean(pendingUpdates[student.id])}
+                        disabled={isLockedForEdit}
                         size="small"
                         sx={{
                           minWidth: 88,
@@ -450,7 +539,7 @@ export const AttendancePage = () => {
                       <Button
                         onClick={() => updateStudentAttendance(student, false)}
                         variant={!student.attendance ? 'contained' : 'text'}
-                        disabled={Boolean(pendingUpdates[student.id])}
+                        disabled={isLockedForEdit}
                         size="small"
                         sx={{
                           minWidth: 88,
@@ -471,6 +560,7 @@ export const AttendancePage = () => {
               ))}
             </TableBody>
           </Table>
+          </TableContainer>
           <TablePagination
             component="div"
             count={filteredStudents.length}
@@ -499,6 +589,7 @@ export const AttendancePage = () => {
           </Box>
         </CardContent>
       </Card>
+
     </Box>
   );
 };

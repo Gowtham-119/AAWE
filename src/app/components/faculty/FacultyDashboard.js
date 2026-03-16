@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, Chip, FormControl, Grid, InputLabel, MenuItem, Select, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Box, Button, Card, CardContent, Chip, FormControl, Grid, InputLabel, MenuItem, Select, Table, TableBody, TableCell, TableHead, TablePagination, TableRow, TextField, Typography } from '@mui/material';
 import { BookOpen, Clock, Users } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAuth } from '../../context/AuthContext.js';
 import { supabase } from '../../lib/supabaseClient.js';
+import { LIVE_STALE_TIME_MS, STATIC_STALE_TIME_MS } from '../../lib/queryClient';
+import { queryKeys } from '../../lib/queryKeys';
 import {
   assignClassToDepartment,
   deleteClassAssignmentsByDepartmentCourse,
@@ -13,32 +17,118 @@ import {
   getStudents,
   updateClassAssignmentVenueByDepartmentCourse,
 } from '../../lib/academicDataApi';
+import NoticesPanel from '../ui/NoticesPanel.jsx';
 
 const VENUE_OPTIONS = ['SF', 'ME', 'WW', 'EW', 'LAB'];
 
 export const FacultyDashboard = () => {
   const { user } = useAuth();
-  const [students, setStudents] = useState([]);
+  const queryClient = useQueryClient();
+  const normalizedEmail = (user?.email || '').trim().toLowerCase();
+
   const [facultyDepartment, setFacultyDepartment] = useState((user?.department || '').trim().toUpperCase());
-  const [courses, setCourses] = useState([]);
   const [selectedCourse, setSelectedCourse] = useState('');
-  const [departmentStaff, setDepartmentStaff] = useState([]);
   const [selectedStaffEmail, setSelectedStaffEmail] = useState('');
   const [venue, setVenue] = useState('SF');
-  const [isLoadingFacultyProfile, setIsLoadingFacultyProfile] = useState(false);
-  const [isLoadingCourses, setIsLoadingCourses] = useState(false);
-  const [isLoadingStaff, setIsLoadingStaff] = useState(false);
-  const [isLoadingAssignedRows, setIsLoadingAssignedRows] = useState(false);
-  const [assignedRows, setAssignedRows] = useState([]);
+  const [assignedRowsPage, setAssignedRowsPage] = useState(0);
+  const [assignedRowsPerPage, setAssignedRowsPerPage] = useState(10);
   const [editingCourseCode, setEditingCourseCode] = useState('');
   const [editingVenue, setEditingVenue] = useState('SF');
-  const [isSavingVenue, setIsSavingVenue] = useState(false);
-  const [isDeletingCourse, setIsDeletingCourse] = useState(false);
-  const [isAssigning, setIsAssigning] = useState(false);
   const [targetEmailsInput, setTargetEmailsInput] = useState('');
-  const [message, setMessage] = useState({ type: '', text: '' });
 
-  const quickStats = [
+  const { data: facultyProfile, isLoading: isLoadingFacultyProfile, isSuccess: isFacultyProfileLoaded } = useQuery({
+    queryKey: queryKeys.faculty.profile(normalizedEmail),
+    queryFn: () => getFacultyProfileByEmail(normalizedEmail),
+    enabled: Boolean(normalizedEmail),
+    staleTime: STATIC_STALE_TIME_MS,
+  });
+
+  const { data: courses = [], isLoading: isLoadingCourses } = useQuery({
+    queryKey: queryKeys.faculty.courses(facultyDepartment),
+    queryFn: () => getDepartmentCourses(facultyDepartment),
+    enabled: Boolean(facultyDepartment),
+    staleTime: STATIC_STALE_TIME_MS,
+  });
+
+  const { data: departmentStaff = [], isLoading: isLoadingStaff } = useQuery({
+    queryKey: queryKeys.faculty.staff(facultyDepartment),
+    queryFn: async () => {
+      const rows = await getDepartmentStaff(facultyDepartment);
+      return rows.slice(0, 5);
+    },
+    enabled: Boolean(facultyDepartment),
+    staleTime: STATIC_STALE_TIME_MS,
+  });
+
+  const { data: assignmentSourceRows = [], isLoading: isLoadingAssignedRows } = useQuery({
+    queryKey: queryKeys.faculty.assignments(facultyDepartment),
+    queryFn: () => getClassAssignmentsByDepartment(facultyDepartment),
+    enabled: Boolean(facultyDepartment),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const { data: selectedDepartmentCount = 0 } = useQuery({
+    queryKey: queryKeys.faculty.students(facultyDepartment, 1, 1),
+    queryFn: async () => {
+      const result = await getStudents({ page: 1, pageSize: 1, department: facultyDepartment });
+      return result.total || 0;
+    },
+    enabled: Boolean(facultyDepartment),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const assignClassMutation = useMutation({
+    mutationFn: assignClassToDepartment,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.assignments(facultyDepartment) });
+    },
+  });
+
+  const updateVenueMutation = useMutation({
+    mutationFn: updateClassAssignmentVenueByDepartmentCourse,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.assignments(facultyDepartment) });
+    },
+  });
+
+  const deleteAssignmentMutation = useMutation({
+    mutationFn: deleteClassAssignmentsByDepartmentCourse,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.assignments(facultyDepartment) });
+    },
+  });
+
+  const assignedRows = useMemo(() => {
+    const grouped = new Map();
+
+    assignmentSourceRows.forEach((row) => {
+      const key = `${row.course_code}::${row.staff_email || row.staff_name || ''}`;
+      const current = grouped.get(key);
+
+      if (!current) {
+        grouped.set(key, {
+          courseCode: row.course_code,
+          courseName: row.course_name,
+          venue: row.venue || '',
+          staffName: row.staff_name || 'N/A',
+          staffEmail: row.staff_email || '',
+          studentCount: 1,
+          updatedAt: row.updated_at,
+        });
+        return;
+      }
+
+      grouped.set(key, {
+        ...current,
+        studentCount: current.studentCount + 1,
+        updatedAt: current.updatedAt > row.updated_at ? current.updatedAt : row.updated_at,
+      });
+    });
+
+    return Array.from(grouped.values());
+  }, [assignmentSourceRows]);
+
+  const quickStats = useMemo(() => ([
     {
       title: 'My Courses',
       value: String(courses.length || 0),
@@ -50,7 +140,7 @@ export const FacultyDashboard = () => {
     },
     {
       title: 'Total Students',
-      value: String(students.length || 0),
+      value: String(selectedDepartmentCount || 0),
       description: facultyDepartment ? `In ${facultyDepartment} department` : 'Department not set',
       icon: Users,
       iconBg: '#22c55e',
@@ -66,7 +156,7 @@ export const FacultyDashboard = () => {
       cardBg: 'linear-gradient(145deg, #f5edff 0%, #f3e8ff 100%)',
       iconGlow: '0 12px 22px rgba(168,85,247,0.28)',
     },
-  ];
+  ]), [assignedRows.length, courses.length, facultyDepartment, selectedDepartmentCount]);
 
   const glassCardSx = {
     borderRadius: 3,
@@ -76,166 +166,45 @@ export const FacultyDashboard = () => {
     border: '1px solid rgba(148,163,184,0.20)',
   };
 
-  const extractDepartmentCode = (email) => {
-    const match = (email || '').trim().toLowerCase().match(/\.([a-z]{2})\d*@/);
-    return match?.[1]?.toUpperCase() || 'NA';
-  };
-
   useEffect(() => {
-    const loadFacultyProfile = async () => {
-      if (!user?.email) return;
-
-      setIsLoadingFacultyProfile(true);
-
-      try {
-        const profile = await getFacultyProfileByEmail(user.email);
-        const resolvedDepartment = (profile?.department || user?.department || '').trim().toUpperCase();
-        setFacultyDepartment(resolvedDepartment);
-      } catch (error) {
-        console.error('Failed to load faculty profile:', error);
-      } finally {
-        setIsLoadingFacultyProfile(false);
-      }
-    };
-
-    loadFacultyProfile();
-  }, [user?.email, user?.department]);
+    const resolvedDepartment = (facultyProfile?.department || user?.department || '').trim().toUpperCase();
+    setFacultyDepartment(resolvedDepartment);
+  }, [facultyProfile?.department, user?.department]);
 
   useEffect(() => {
     if (!facultyDepartment) {
-      setCourses([]);
       setSelectedCourse('');
       return;
     }
 
-    const loadCourses = async () => {
-      setIsLoadingCourses(true);
-      try {
-        const rows = await getDepartmentCourses(facultyDepartment);
-        setCourses(rows);
-
-        if (!rows.length) {
-          setSelectedCourse('');
-          return;
-        }
-
-        setSelectedCourse((previousCourseCode) => {
-          if (rows.some((course) => course.code === previousCourseCode)) return previousCourseCode;
-          return rows[0].code;
-        });
-      } catch (error) {
-        console.error('Failed to load department courses:', error);
-      } finally {
-        setIsLoadingCourses(false);
-      }
-    };
-
-    loadCourses();
-  }, [facultyDepartment]);
-
-  useEffect(() => {
-    if (!facultyDepartment) {
-      setAssignedRows([]);
+    if (!courses.length) {
+      setSelectedCourse('');
       return;
     }
 
-    const loadAssignments = async () => {
-      setIsLoadingAssignedRows(true);
-      try {
-        const rows = await getClassAssignmentsByDepartment(facultyDepartment);
-        const grouped = new Map();
-
-        rows.forEach((row) => {
-          const key = `${row.course_code}::${row.staff_email || row.staff_name || ''}`;
-          const current = grouped.get(key);
-
-          if (!current) {
-            grouped.set(key, {
-              courseCode: row.course_code,
-              courseName: row.course_name,
-              venue: row.venue || '',
-              staffName: row.staff_name || 'N/A',
-              staffEmail: row.staff_email || '',
-              studentCount: 1,
-              updatedAt: row.updated_at,
-            });
-            return;
-          }
-
-          grouped.set(key, {
-            ...current,
-            studentCount: current.studentCount + 1,
-            updatedAt: current.updatedAt > row.updated_at ? current.updatedAt : row.updated_at,
-          });
-        });
-
-        setAssignedRows(Array.from(grouped.values()));
-      } catch (error) {
-        console.error('Failed to load assigned classes:', error);
-      } finally {
-        setIsLoadingAssignedRows(false);
-      }
-    };
-
-    loadAssignments();
-  }, [facultyDepartment]);
+    setSelectedCourse((previousCourseCode) => {
+      if (courses.some((course) => course.code === previousCourseCode)) return previousCourseCode;
+      return courses[0].code;
+    });
+  }, [facultyDepartment, courses]);
 
   useEffect(() => {
     if (!facultyDepartment) {
-      setDepartmentStaff([]);
       setSelectedStaffEmail('');
       return;
     }
 
-    const loadStaff = async () => {
-      setIsLoadingStaff(true);
-      try {
-        const rows = await getDepartmentStaff(facultyDepartment);
-        const limitedRows = rows.slice(0, 5);
-        setDepartmentStaff(limitedRows);
-
-        if (!limitedRows.length) {
-          setSelectedStaffEmail('');
-          return;
-        }
-
-        const defaultStaffEmail = limitedRows.find((staff) => staff.email === user?.email)?.email || limitedRows[0].email;
-        setSelectedStaffEmail((previousStaffEmail) => {
-          if (limitedRows.some((staff) => staff.email === previousStaffEmail)) return previousStaffEmail;
-          return defaultStaffEmail;
-        });
-      } catch (error) {
-        console.error('Failed to load department staff:', error);
-      } finally {
-        setIsLoadingStaff(false);
-      }
-    };
-
-    loadStaff();
-  }, [facultyDepartment, user?.email]);
-
-  useEffect(() => {
-    if (!facultyDepartment) {
-      setStudents([]);
+    if (!departmentStaff.length) {
+      setSelectedStaffEmail('');
       return;
     }
 
-    const loadStudents = async () => {
-      try {
-        const rows = await getStudents();
-        const filtered = rows.filter((student) => {
-          const emailDepartment = extractDepartmentCode(student.email);
-          const profileDepartment = (student.department || '').trim().toUpperCase();
-          return emailDepartment === facultyDepartment || profileDepartment === facultyDepartment;
-        });
-        setStudents(filtered);
-      } catch (error) {
-        console.error('Failed to load students for class assignment:', error);
-      }
-    };
-
-    loadStudents();
-  }, [facultyDepartment]);
+    const defaultStaffEmail = departmentStaff.find((staff) => staff.email === normalizedEmail)?.email || departmentStaff[0].email;
+    setSelectedStaffEmail((previousStaffEmail) => {
+      if (departmentStaff.some((staff) => staff.email === previousStaffEmail)) return previousStaffEmail;
+      return defaultStaffEmail;
+    });
+  }, [facultyDepartment, departmentStaff, normalizedEmail]);
 
   useEffect(() => {
     if (!user?.email) return;
@@ -251,10 +220,9 @@ export const FacultyDashboard = () => {
           filter: `email=eq.${user.email}`,
         },
         (payload) => {
-          const updatedDepartment = (payload.new?.department || '').trim().toUpperCase();
-          if (updatedDepartment) {
-            setFacultyDepartment(updatedDepartment);
-          }
+          const nextDepartment = (payload.new?.department || '').trim().toUpperCase();
+          if (!nextDepartment) return;
+          void queryClient.invalidateQueries({ queryKey: queryKeys.faculty.profile(normalizedEmail) });
         }
       )
       .subscribe();
@@ -262,60 +230,10 @@ export const FacultyDashboard = () => {
     return () => {
       void supabase.removeChannel(profileChannel);
     };
-  }, [user?.email]);
+  }, [normalizedEmail, user?.email, queryClient]);
 
   useEffect(() => {
     if (!facultyDepartment) return;
-
-    const refreshStaff = async () => {
-      const rows = await getDepartmentStaff(facultyDepartment);
-      const limitedRows = rows.slice(0, 5);
-      setDepartmentStaff(limitedRows);
-      setSelectedStaffEmail((previousStaffEmail) => {
-        if (limitedRows.some((staff) => staff.email === previousStaffEmail)) return previousStaffEmail;
-        return limitedRows[0]?.email || '';
-      });
-    };
-
-    const refreshCourses = async () => {
-      const rows = await getDepartmentCourses(facultyDepartment);
-      setCourses(rows);
-      setSelectedCourse((previousCourseCode) => {
-        if (rows.some((course) => course.code === previousCourseCode)) return previousCourseCode;
-        return rows[0]?.code || '';
-      });
-    };
-
-    const refreshAssignments = async () => {
-      const rows = await getClassAssignmentsByDepartment(facultyDepartment);
-      const grouped = new Map();
-
-      rows.forEach((row) => {
-        const key = `${row.course_code}::${row.staff_email || row.staff_name || ''}`;
-        const current = grouped.get(key);
-
-        if (!current) {
-          grouped.set(key, {
-            courseCode: row.course_code,
-            courseName: row.course_name,
-            venue: row.venue || '',
-            staffName: row.staff_name || 'N/A',
-            staffEmail: row.staff_email || '',
-            studentCount: 1,
-            updatedAt: row.updated_at,
-          });
-          return;
-        }
-
-        grouped.set(key, {
-          ...current,
-          studentCount: current.studentCount + 1,
-          updatedAt: current.updatedAt > row.updated_at ? current.updatedAt : row.updated_at,
-        });
-      });
-
-      setAssignedRows(Array.from(grouped.values()));
-    };
 
     const staffChannel = supabase
       .channel(`department-staff-${facultyDepartment}`)
@@ -328,7 +246,7 @@ export const FacultyDashboard = () => {
           filter: `department=eq.${facultyDepartment}`,
         },
         () => {
-          void refreshStaff();
+          void queryClient.invalidateQueries({ queryKey: queryKeys.faculty.staff(facultyDepartment) });
         }
       )
       .subscribe();
@@ -344,7 +262,7 @@ export const FacultyDashboard = () => {
           filter: `department=eq.${facultyDepartment}`,
         },
         () => {
-          void refreshCourses();
+          void queryClient.invalidateQueries({ queryKey: queryKeys.faculty.courses(facultyDepartment) });
         }
       )
       .subscribe();
@@ -360,7 +278,7 @@ export const FacultyDashboard = () => {
           filter: `department=eq.${facultyDepartment}`,
         },
         () => {
-          void refreshAssignments();
+          void queryClient.invalidateQueries({ queryKey: queryKeys.faculty.assignments(facultyDepartment) });
         }
       )
       .subscribe();
@@ -370,65 +288,63 @@ export const FacultyDashboard = () => {
       void supabase.removeChannel(courseChannel);
       void supabase.removeChannel(assignmentChannel);
     };
-  }, [facultyDepartment]);
+  }, [facultyDepartment, queryClient]);
 
   const selectedCourseDetails = courses.find((course) => course.code === selectedCourse) || courses[0];
   const selectedStaffDetails = departmentStaff.find((staff) => staff.email === selectedStaffEmail) || null;
 
-  const selectedDepartmentCount = useMemo(() => {
-    return students.length;
-  }, [students]);
+  useEffect(() => {
+    setAssignedRowsPage(0);
+  }, [assignedRows.length, assignedRowsPerPage]);
+
+  const pagedAssignedRows = assignedRows.slice(
+    assignedRowsPage * assignedRowsPerPage,
+    assignedRowsPage * assignedRowsPerPage + assignedRowsPerPage
+  );
 
   const handleAssignClass = async () => {
-    setMessage({ type: '', text: '' });
-
     const targetStudentEmails = targetEmailsInput
       .split(',')
       .map((value) => value.trim().toLowerCase())
       .filter(Boolean);
 
     if (!facultyDepartment) {
-      setMessage({ type: 'error', text: 'Please update your department in Profile first.' });
+      toast.error('Please update your department in Profile first.');
       return;
     }
 
     if (!selectedCourseDetails?.code) {
-      setMessage({ type: 'error', text: `No courses configured for ${facultyDepartment} department.` });
+      toast.error(`No courses configured for ${facultyDepartment} department.`);
       return;
     }
 
     if (!selectedStaffDetails) {
-      setMessage({ type: 'error', text: `No active staff configured for ${facultyDepartment} department.` });
+      toast.error(`No active staff configured for ${facultyDepartment} department.`);
       return;
     }
 
     if (!venue.trim()) {
-      setMessage({ type: 'error', text: 'Please enter a venue.' });
+      toast.error('Please enter a venue.');
       return;
     }
 
-    setIsAssigning(true);
-
     try {
-      const assignedRows = await assignClassToDepartment({
+      const assignedRows = await assignClassMutation.mutateAsync({
         departmentCode: facultyDepartment,
         selectedCourse: selectedCourseDetails,
         venue,
         staffName: selectedStaffDetails.name,
         staffEmail: selectedStaffDetails.email,
         facultyEmail: user?.email,
+        actorEmail: user?.email,
+        actorRole: user?.role,
         targetStudentEmails,
       });
 
-      setMessage({
-        type: 'success',
-        text: `${selectedCourseDetails.code} assigned to ${assignedRows.length} students in ${facultyDepartment} with venue ${venue}${targetStudentEmails.length ? ' (targeted emails)' : ''}.`,
-      });
+      toast.success(`${selectedCourseDetails.code} assigned to ${assignedRows.length} students in ${facultyDepartment}.`);
     } catch (error) {
       console.error('Failed to assign class:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to assign class.' });
-    } finally {
-      setIsAssigning(false);
+      toast.error(error?.message || 'Failed to assign class.');
     }
   };
 
@@ -440,46 +356,38 @@ export const FacultyDashboard = () => {
   const handleUpdateVenue = async () => {
     if (!facultyDepartment || !editingCourseCode) return;
 
-    setIsSavingVenue(true);
     try {
-      const updatedRows = await updateClassAssignmentVenueByDepartmentCourse({
+      const updatedRows = await updateVenueMutation.mutateAsync({
         departmentCode: facultyDepartment,
         courseCode: editingCourseCode,
         venue: editingVenue,
+        actorEmail: user?.email,
+        actorRole: user?.role,
       });
 
-      setMessage({
-        type: 'success',
-        text: `Venue updated to ${editingVenue} for ${editingCourseCode} (${updatedRows.length} students).`,
-      });
+      toast.success(`Venue updated to ${editingVenue} for ${editingCourseCode} (${updatedRows.length} students).`);
       setEditingCourseCode('');
     } catch (error) {
       console.error('Failed to update venue:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to update venue.' });
-    } finally {
-      setIsSavingVenue(false);
+      toast.error(error?.message || 'Failed to update venue.');
     }
   };
 
   const handleDeleteAssignment = async (courseCode) => {
     if (!facultyDepartment || !courseCode) return;
 
-    setIsDeletingCourse(true);
     try {
-      const deletedRows = await deleteClassAssignmentsByDepartmentCourse({
+      const deletedRows = await deleteAssignmentMutation.mutateAsync({
         departmentCode: facultyDepartment,
         courseCode,
+        actorEmail: user?.email,
+        actorRole: user?.role,
       });
 
-      setMessage({
-        type: 'success',
-        text: `${courseCode} assignments deleted for ${deletedRows.length} students.`,
-      });
+      toast.success(`${courseCode} assignments deleted for ${deletedRows.length} students.`);
     } catch (error) {
       console.error('Failed to delete assignment:', error);
-      setMessage({ type: 'error', text: error?.message || 'Failed to delete assignment.' });
-    } finally {
-      setIsDeletingCourse(false);
+      toast.error(error?.message || 'Failed to delete assignment.');
     }
   };
 
@@ -490,11 +398,17 @@ export const FacultyDashboard = () => {
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Manage your courses and student progress</Typography>
       </Box>
 
+      {isFacultyProfileLoaded && Number(facultyProfile?.completeness || 0) < 80 ? (
+        <Alert severity="info" sx={{ borderRadius: 2 }}>
+          Complete your profile to at least 80% to keep your faculty account information up to date.
+        </Alert>
+      ) : null}
+
       <Grid container spacing={2}>
         {quickStats.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <Grid key={index} size={{ xs: 12, md: 4 }}>
+            <Grid key={index} size={{ xs: 12, sm: 6, md: 4 }}>
               <Card sx={{ ...glassCardSx, background: stat.cardBg }}>
                 <CardContent sx={{ p: 2.25 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -514,6 +428,12 @@ export const FacultyDashboard = () => {
         })}
       </Grid>
 
+      <NoticesPanel
+        role="faculty"
+        title="Faculty Notices"
+        sx={glassCardSx}
+      />
+
       <Card sx={glassCardSx}>
         <CardContent sx={{ p: 3 }}>
           <Typography sx={{ fontSize: '1.125rem', fontWeight: 600, color: '#111827', mb: 0.5 }}>
@@ -522,12 +442,6 @@ export const FacultyDashboard = () => {
           <Typography sx={{ color: '#6b7280', mb: 2.5 }}>
             Assign class, venue, and staff for students in your department.
           </Typography>
-
-          {message.text && (
-            <Alert severity={message.type === 'success' ? 'success' : 'error'} sx={{ mb: 2 }}>
-              {message.text}
-            </Alert>
-          )}
 
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, md: 3 }}>
@@ -622,10 +536,10 @@ export const FacultyDashboard = () => {
                 <Button
                   variant="contained"
                   onClick={handleAssignClass}
-                  disabled={isAssigning}
+                  disabled={assignClassMutation.isPending}
                   sx={{ textTransform: 'none', backgroundColor: '#2563eb', '&:hover': { backgroundColor: '#1d4ed8' } }}
                 >
-                  {isAssigning ? 'Assigning...' : 'Assign Class'}
+                  {assignClassMutation.isPending ? 'Assigning...' : 'Assign Class'}
                 </Button>
               </Box>
             </Grid>
@@ -665,7 +579,7 @@ export const FacultyDashboard = () => {
                 </TableRow>
               )}
 
-              {!isLoadingAssignedRows && assignedRows.map((row) => {
+              {!isLoadingAssignedRows && pagedAssignedRows.map((row) => {
                 const isEditingRow = editingCourseCode === row.courseCode;
                 return (
                   <TableRow key={`${row.courseCode}-${row.staffEmail || row.staffName}`}>
@@ -692,10 +606,10 @@ export const FacultyDashboard = () => {
                             size="small"
                             variant="contained"
                             onClick={handleUpdateVenue}
-                            disabled={isSavingVenue}
+                            disabled={updateVenueMutation.isPending}
                             sx={{ textTransform: 'none', backgroundColor: '#2563eb', '&:hover': { backgroundColor: '#1d4ed8' } }}
                           >
-                            {isSavingVenue ? 'Saving...' : 'Save'}
+                            {updateVenueMutation.isPending ? 'Saving...' : 'Save'}
                           </Button>
                           <Button size="small" variant="outlined" onClick={() => setEditingCourseCode('')} sx={{ textTransform: 'none' }}>
                             Cancel
@@ -711,7 +625,7 @@ export const FacultyDashboard = () => {
                             variant="outlined"
                             color="error"
                             onClick={() => handleDeleteAssignment(row.courseCode)}
-                            disabled={isDeletingCourse}
+                            disabled={deleteAssignmentMutation.isPending}
                             sx={{ textTransform: 'none' }}
                           >
                             Delete
@@ -724,6 +638,18 @@ export const FacultyDashboard = () => {
               })}
             </TableBody>
           </Table>
+          <TablePagination
+            component="div"
+            count={assignedRows.length}
+            page={assignedRowsPage}
+            onPageChange={(_event, nextPage) => setAssignedRowsPage(nextPage)}
+            rowsPerPage={assignedRowsPerPage}
+            onRowsPerPageChange={(event) => {
+              setAssignedRowsPerPage(Number(event.target.value));
+              setAssignedRowsPage(0);
+            }}
+            rowsPerPageOptions={[5, 10, 25]}
+          />
         </CardContent>
       </Card>
     </Box>

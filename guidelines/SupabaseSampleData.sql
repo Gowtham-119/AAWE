@@ -2,32 +2,45 @@
 -- Login as role: student
 -- Use email: alice@university.edu
 
+insert into public.departments (code, name, is_active)
+values
+  ('AG', 'Agricultural Engineering', true),
+  ('CS', 'Computer Science', true),
+  ('IT', 'Information Technology', true)
+on conflict (code)
+do update set
+  name = excluded.name,
+  is_active = excluded.is_active;
+
 insert into public.attendance_records (
   student_email,
   student_name,
   roll_no,
   course_code,
   course_name,
+  semester,
+  academic_year,
   attendance_date,
   is_present,
   faculty_email
 )
 values
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2026-02-20', true,  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2026-02-21', true,  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2026-02-22', false, 'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2026-02-20', true,  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2026-02-21', true,  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2026-02-22', true,  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2026-02-20', true,  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2026-02-21', false, 'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2026-02-22', true,  'faculty@university.edu')
-on conflict (student_email, course_code, attendance_date)
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2024-ODD', '2024-25', '2026-02-20', true,  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2024-ODD', '2024-25', '2026-02-21', true,  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2024-ODD', '2024-25', '2026-02-22', false, 'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2024-ODD', '2024-25', '2026-02-20', true,  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2024-ODD', '2024-25', '2026-02-21', true,  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2024-ODD', '2024-25', '2026-02-22', true,  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2024-ODD', '2024-25', '2026-02-20', true,  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2024-ODD', '2024-25', '2026-02-21', false, 'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2024-ODD', '2024-25', '2026-02-22', true,  'faculty@university.edu')
+on conflict (student_email, course_code, attendance_date, semester)
 do update set
   is_present = excluded.is_present,
   student_name = excluded.student_name,
   roll_no = excluded.roll_no,
   course_name = excluded.course_name,
+  academic_year = excluded.academic_year,
   faculty_email = excluded.faculty_email;
 
 insert into public.marks_records (
@@ -36,6 +49,8 @@ insert into public.marks_records (
   roll_no,
   course_code,
   course_name,
+  semester,
+  academic_year,
   mid_term,
   assignment,
   quiz,
@@ -45,10 +60,10 @@ insert into public.marks_records (
   faculty_email
 )
 values
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', 85, 90, 88, 87, 87.2, 'A',  'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', 78, 82, 75, 80, 79.3, 'B+', 'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', 82, 85, 80, 83, 82.5, 'A-', 'faculty@university.edu')
-on conflict (student_email, course_code)
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS301', 'Data Structures & Algorithms', '2024-ODD', '2024-25', 85, 90, 88, 87, 87.2, 'A',  'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS402', 'Database Management Systems', '2024-ODD', '2024-25', 78, 82, 75, 80, 79.3, 'B+', 'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS303', 'Operating Systems', '2024-ODD', '2024-25', 82, 85, 80, 83, 82.5, 'A-', 'faculty@university.edu')
+on conflict (student_email, course_code, semester)
 do update set
   mid_term = excluded.mid_term,
   assignment = excluded.assignment,
@@ -59,6 +74,7 @@ do update set
   student_name = excluded.student_name,
   roll_no = excluded.roll_no,
   course_name = excluded.course_name,
+  academic_year = excluded.academic_year,
   faculty_email = excluded.faculty_email,
   updated_at = now();
 
@@ -139,6 +155,7 @@ values
   ('allow_google_faculty', 'true'::jsonb),
   ('allow_password_admin', 'true'::jsonb),
   ('enforce_active_user_access', 'true'::jsonb),
+  ('current_semester', to_jsonb('2024-ODD'::text)),
   ('maintenance_mode', 'false'::jsonb),
   ('maintenance_message', to_jsonb('System is under maintenance. Please try again later.'::text)),
   ('support_contact', to_jsonb('admin@university.edu'::text))
@@ -154,21 +171,24 @@ insert into public.class_assignments (
   department,
   course_code,
   course_name,
+  semester,
+  academic_year,
   venue,
   staff_name,
   staff_email,
   faculty_email
 )
 values
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS', 'CS601', 'Advanced Data Structures', 'Room 301', 'Dr. Karthik', 'karthik.cs@university.edu', 'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS', 'CS602', 'Cloud Computing', 'Room 205', 'Dr. Nivetha', 'nivetha.cs@university.edu', 'faculty@university.edu'),
-  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS', 'CS603', 'Distributed Systems', 'Block B - Hall 2', 'Dr. Balaji', 'balaji.cs@university.edu', 'faculty@university.edu')
-on conflict (student_email, course_code)
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS', 'CS601', 'Advanced Data Structures', '2024-ODD', '2024-25', 'Room 301', 'Dr. Karthik', 'karthik.cs@university.edu', 'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS', 'CS602', 'Cloud Computing', '2024-ODD', '2024-25', 'Room 205', 'Dr. Nivetha', 'nivetha.cs@university.edu', 'faculty@university.edu'),
+  ('alice@university.edu', 'Alice Johnson', 'CS2021001', 'CS', 'CS603', 'Distributed Systems', '2024-ODD', '2024-25', 'Block B - Hall 2', 'Dr. Balaji', 'balaji.cs@university.edu', 'faculty@university.edu')
+on conflict (student_email, course_code, semester)
 do update set
   student_name = excluded.student_name,
   roll_no = excluded.roll_no,
   department = excluded.department,
   course_name = excluded.course_name,
+  academic_year = excluded.academic_year,
   venue = excluded.venue,
   staff_name = excluded.staff_name,
   staff_email = excluded.staff_email,
