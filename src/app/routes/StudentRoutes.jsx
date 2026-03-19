@@ -5,7 +5,7 @@ import { RouteErrorBoundary } from '../components/GlobalErrorBoundary.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton.jsx';
 
 const AppShell = React.lazy(() => import('../AppShell.jsx'));
-const StudentDashboard = React.lazy(() => import('../components/student/StudentDashboard.js').then((module) => ({ default: module.StudentDashboard })));
+const StudentDashboard = React.lazy(() => import('../components/student/StudentDashboard.js'));
 const StudentTimetablePage = React.lazy(() => import('../components/student/StudentTimetablePage.js'));
 const StudentCoursesPage = React.lazy(() => import('../components/student/StudentCoursesPage.js'));
 const StudentAttendancePage = React.lazy(() => import('../components/student/StudentAttendancePage.js'));

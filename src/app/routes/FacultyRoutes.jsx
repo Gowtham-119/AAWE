@@ -5,11 +5,11 @@ import { RouteErrorBoundary } from '../components/GlobalErrorBoundary.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton.jsx';
 
 const AppShell = React.lazy(() => import('../AppShell.jsx'));
-const FacultyDashboard = React.lazy(() => import('../components/faculty/FacultyDashboard.js').then((module) => ({ default: module.FacultyDashboard })));
+const FacultyDashboard = React.lazy(() => import('../components/faculty/FacultyDashboard.js'));
 const FacultyTimetablePage = React.lazy(() => import('../components/faculty/FacultyTimetablePage.js'));
-const AttendancePage = React.lazy(() => import('../components/faculty/AttendancePage.js').then((module) => ({ default: module.AttendancePage })));
-const MarksEntryPage = React.lazy(() => import('../components/faculty/MarksEntryPage.js').then((module) => ({ default: module.MarksEntryPage })));
-const FacultyProfilePage = React.lazy(() => import('../components/faculty/FacultyProfilePage.js').then((module) => ({ default: module.FacultyProfilePage })));
+const AttendancePage = React.lazy(() => import('../components/faculty/AttendancePage.js'));
+const MarksEntryPage = React.lazy(() => import('../components/faculty/MarksEntryPage.js'));
+const FacultyProfilePage = React.lazy(() => import('../components/faculty/FacultyProfilePage.js'));
 
 const FacultyRoutes = () => (
   <React.Suspense fallback={<PageSkeleton />}>

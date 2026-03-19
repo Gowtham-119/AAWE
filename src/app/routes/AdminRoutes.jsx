@@ -5,8 +5,8 @@ import { RouteErrorBoundary } from '../components/GlobalErrorBoundary.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton.jsx';
 
 const AppShell = React.lazy(() => import('../AppShell.jsx'));
-const AdminDashboard = React.lazy(() => import('../components/admin/AdminDashboard.js').then((module) => ({ default: module.AdminDashboard })));
-const AnalyticsPage = React.lazy(() => import('../components/admin/AnalyticsPage.js').then((module) => ({ default: module.AnalyticsPage })));
+const AdminDashboard = React.lazy(() => import('../components/admin/AdminDashboard.js'));
+const AnalyticsPage = React.lazy(() => import('../components/admin/AnalyticsPage.js'));
 const ManageUsersPage = React.lazy(() => import('../components/admin/ManageUsersPage.js'));
 const ManageCoursesPage = React.lazy(() => import('../components/admin/ManageCoursesPage.js'));
 const ManageDepartmentsPage = React.lazy(() => import('../components/admin/ManageDepartmentsPage.js'));
