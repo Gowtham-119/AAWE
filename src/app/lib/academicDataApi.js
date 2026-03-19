@@ -17,6 +17,19 @@ const isPermissionError = (error) => {
   );
 };
 
+const isMissingTableError = (error) => {
+  const status = Number(error?.status || 0);
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || '').toLowerCase();
+
+  return (
+    status === 404
+    || code === 'PGRST205'
+    || message.includes('could not find the table')
+    || message.includes('relation') && message.includes('does not exist')
+  );
+};
+
 const query = async (fn, context = '') => {
   try {
     return await fn();
@@ -2083,7 +2096,12 @@ export const getNotices = async ({ role = 'student', limit = 3 } = {}) => {
     .order('start_date', { ascending: false })
     .limit(normalizedLimit * 3), 'getNotices');
 
-  if (error) throw error;
+  if (error) {
+    if (isMissingTableError(error)) {
+      return [];
+    }
+    throw error;
+  }
 
   return (data || [])
     .filter((row) => !row.end_date || row.end_date >= today)
@@ -2097,7 +2115,12 @@ export const getAdminNotices = async () => {
     .select('id, title, body, target_role, start_date, end_date, is_active, created_at, created_by')
     .order('created_at', { ascending: false }), 'getAdminNotices');
 
-  if (error) throw error;
+  if (error) {
+    if (isMissingTableError(error)) {
+      return [];
+    }
+    throw error;
+  }
   return (data || []).map(mapNoticeRow);
 };
 

@@ -3,13 +3,14 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { RoleGuard } from './ProtectedRoute.jsx';
 import { RouteErrorBoundary } from '../components/GlobalErrorBoundary.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton.jsx';
+import { lazyWithRetry } from '../lib/lazyWithRetry.js';
 
-const AppShell = React.lazy(() => import('../AppShell.jsx'));
-const FacultyDashboard = React.lazy(() => import('../components/faculty/FacultyDashboard.js'));
-const FacultyTimetablePage = React.lazy(() => import('../components/faculty/FacultyTimetablePage.js'));
-const AttendancePage = React.lazy(() => import('../components/faculty/AttendancePage.js'));
-const MarksEntryPage = React.lazy(() => import('../components/faculty/MarksEntryPage.js'));
-const FacultyProfilePage = React.lazy(() => import('../components/faculty/FacultyProfilePage.js'));
+const AppShell = lazyWithRetry(() => import('../AppShell.jsx'), 'faculty-app-shell');
+const FacultyDashboard = lazyWithRetry(() => import('../components/faculty/FacultyDashboard.js'), 'faculty-dashboard');
+const FacultyTimetablePage = lazyWithRetry(() => import('../components/faculty/FacultyTimetablePage.js'), 'faculty-timetable');
+const AttendancePage = lazyWithRetry(() => import('../components/faculty/AttendancePage.js'), 'faculty-attendance');
+const MarksEntryPage = lazyWithRetry(() => import('../components/faculty/MarksEntryPage.js'), 'faculty-marks');
+const FacultyProfilePage = lazyWithRetry(() => import('../components/faculty/FacultyProfilePage.js'), 'faculty-profile');
 
 const FacultyRoutes = () => (
   <React.Suspense fallback={<PageSkeleton />}>

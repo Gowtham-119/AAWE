@@ -27,6 +27,7 @@ import { Copy, Download, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import {
   deleteMarksForCourse,
+  getDepartmentCourses,
   getMarksForCourse,
   getMarksForCourseInSemester,
   getStudents,
@@ -36,13 +37,6 @@ import {
 import { LIVE_STALE_TIME_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
 import { toast } from 'sonner';
-
-const SCORE_LIMITS = {
-  midTerm: 25,
-  assignment: 10,
-  quiz: 10,
-  endTerm: 50,
-};
 
 const SAVE_DEBOUNCE_MS = 1000;
 
@@ -102,7 +96,6 @@ const getPreviousSemester = (currentSemester) => {
 
 export const MarksEntryPage = () => {
   const { user } = useAuth();
-  const [selectedCourse, setSelectedCourse] = useState('CS301');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -111,24 +104,52 @@ export const MarksEntryPage = () => {
 
   const saveTimersRef = useRef({});
 
-  const courses = [
-    { code: 'CS301', name: 'Data Structures & Algorithms' },
-    { code: 'CS402', name: 'Database Management Systems' },
-    { code: 'CS303', name: 'Operating Systems' },
-    { code: 'CS501', name: 'Software Engineering' },
-  ];
+  const facultyDepartment = (user?.department || '').trim().toUpperCase();
 
+  // Fetch system settings for score limits and grade boundaries
+  const { data: systemSettings = {} } = useQuery({
+    queryKey: ['system-settings'],
+    queryFn: getSystemSettings,
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  // Fetch courses for the faculty's department dynamically
+  const { data: departmentCourses = [] } = useQuery({
+    queryKey: ['faculty-department-courses', facultyDepartment],
+    queryFn: () => getDepartmentCourses(facultyDepartment),
+    enabled: Boolean(facultyDepartment),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  // Convert system settings score limits to an object
+  const SCORE_LIMITS = useMemo(() => {
+    if (!systemSettings.score_limits) {
+      return { midTerm: 25, assignment: 10, quiz: 10, endTerm: 50 };
+    }
+    try {
+      const parsed = typeof systemSettings.score_limits === 'string'
+        ? JSON.parse(systemSettings.score_limits)
+        : systemSettings.score_limits;
+      return {
+        midTerm: parsed.midTerm || 25,
+        assignment: parsed.assignment || 10,
+        quiz: parsed.quiz || 10,
+        endTerm: parsed.endTerm || 50,
+      };
+    } catch {
+      return { midTerm: 25, assignment: 10, quiz: 10, endTerm: 50 };
+    }
+  }, [systemSettings.score_limits]);
+
+  // Auto-select first course when courses are fetched
+  const [selectedCourse, setSelectedCourse] = useState('');
   const [students, setStudents] = useState([]);
 
-  const glassCardSx = {
-    borderRadius: 3,
-    backdropFilter: 'blur(18px)',
-    backgroundColor: 'rgba(255,255,255,0.74)',
-    boxShadow: '0 14px 30px rgba(15,23,42,0.10)',
-    border: '1px solid rgba(148,163,184,0.20)',
-  };
-
-  const facultyDepartment = (user?.department || '').trim().toUpperCase();
+  useEffect(() => {
+    if (departmentCourses.length > 0 && !selectedCourse) {
+      setSelectedCourse(departmentCourses[0].code);
+    }
+  }, [departmentCourses, selectedCourse]);
 
   const belongsToFacultyDepartment = (student) => {
     if (!facultyDepartment) return true;
@@ -166,18 +187,20 @@ export const MarksEntryPage = () => {
     staleTime: LIVE_STALE_TIME_MS,
   });
 
-  const { data: systemSettings = {} } = useQuery({
-    queryKey: ['system-settings'],
-    queryFn: getSystemSettings,
-    staleTime: LIVE_STALE_TIME_MS,
-  });
-
   const gradeBoundaries = useMemo(() => parseGradeBoundaries(systemSettings.grade_boundaries), [systemSettings.grade_boundaries]);
 
   const selectedCourseDetails = useMemo(
-    () => courses.find((course) => course.code === selectedCourse) || null,
-    [courses, selectedCourse]
+    () => departmentCourses.find((course) => course.code === selectedCourse) || null,
+    [departmentCourses, selectedCourse]
   );
+
+  const glassCardSx = {
+    borderRadius: 3,
+    backdropFilter: 'blur(18px)',
+    backgroundColor: 'rgba(255,255,255,0.74)',
+    boxShadow: '0 14px 30px rgba(15,23,42,0.10)',
+    border: '1px solid rgba(148,163,184,0.20)',
+  };
 
   const currentSemester = String(systemSettings.current_semester || '').trim().toUpperCase();
   const previousSemester = getPreviousSemester(currentSemester);
@@ -386,7 +409,7 @@ export const MarksEntryPage = () => {
               <FormControl fullWidth>
                 <InputLabel>Select Course</InputLabel>
                 <Select value={selectedCourse} label="Select Course" onChange={(e) => setSelectedCourse(e.target.value)}>
-                  {courses.map(course => <MenuItem key={course.code} value={course.code}>{course.code} - {course.name}</MenuItem>)}
+                  {departmentCourses.map(course => <MenuItem key={course.code} value={course.code}>{course.code} - {course.name}</MenuItem>)}
                 </Select>
               </FormControl>
             </Grid>

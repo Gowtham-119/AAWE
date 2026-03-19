@@ -1,47 +1,48 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Box, Card, CardContent, CardHeader, Chip, Grid, LinearProgress, Typography } from '@mui/material';
-import { BookOpen, ClipboardCheck, TrendingUp, Award, Calendar } from 'lucide-react';
+import {
+  Box,
+  Card,
+  CardContent,
+  Chip,
+  Grid,
+  Typography,
+  alpha,
+  useTheme,
+} from '@mui/material';
+import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
-import { getAttendanceByStudentEmail, getClassAssignmentsByStudentEmail, getMarksByStudentEmail, getRecentAttendanceActivityByStudentEmail, getStudentProfileByEmail } from '../../lib/academicDataApi';
+import {
+  getAttendanceByStudentEmail,
+  getClassAssignmentsByStudentEmail,
+  getMarksByStudentEmail,
+  getNotices,
+  getRecentAttendanceActivityByStudentEmail,
+  getStudentProfileByEmail,
+  getStudentTimetableByEmail,
+} from '../../lib/academicDataApi';
 import { LIVE_STALE_TIME_MS, STATIC_STALE_TIME_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
 import { supabase } from '../../lib/supabaseClient.js';
 import { Skeleton } from '../ui/skeleton';
-import NoticesPanel from '../ui/NoticesPanel.jsx';
+import CourseProgress from '../student-dashboard/CourseProgress.jsx';
+import RecentActivity from '../student-dashboard/RecentActivity.jsx';
+import StudentStats from '../student-dashboard/StudentStats.jsx';
+import UpcomingActivities from '../student-dashboard/UpcomingActivities.jsx';
+import {
+  formatNameFromEmail,
+  formatRelativeTime,
+  toDateFromDayAndTime,
+} from '../student-dashboard/dashboardUtils.js';
 
-const formatActivityTime = (isoString) => {
-  if (!isoString) return 'Live update';
-
-  const timestamp = new Date(isoString);
-  if (Number.isNaN(timestamp.getTime())) return 'Live update';
-
-  const diffMs = Date.now() - timestamp.getTime();
-  const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
-  if (diffMinutes < 1) return 'Just now';
-  if (diffMinutes < 60) return `${diffMinutes} min ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} hr ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-};
-
-const formatNameFromEmail = (email) => {
-  const normalized = (email || '').trim().toLowerCase();
-  if (!normalized.includes('@')) return '';
-  const localPart = normalized.split('@')[0] || '';
-  return localPart
-    .replace(/[._-]+/g, ' ')
-    .split(' ')
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-};
+const AttendanceCalendar = lazy(() => import('../student-dashboard/AttendanceCalendar.jsx'));
 
 export const StudentDashboard = () => {
+  const theme = useTheme();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const normalizedEmail = (user?.email || '').trim().toLowerCase();
+  const [selectedCourse, setSelectedCourse] = useState('');
 
   const { data: profileData, isLoading: isLoadingProfile } = useQuery({
     queryKey: queryKeys.student.profile(normalizedEmail),
@@ -80,6 +81,19 @@ export const StudentDashboard = () => {
     queryKey: ['student-recent-activity', normalizedEmail],
     queryFn: () => getRecentAttendanceActivityByStudentEmail(normalizedEmail, 5),
     enabled: Boolean(normalizedEmail),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const { data: timetableRows = [], isLoading: isLoadingTimetable } = useQuery({
+    queryKey: queryKeys.student.timetable(normalizedEmail, resolvedDepartment),
+    queryFn: () => getStudentTimetableByEmail(normalizedEmail, resolvedDepartment),
+    enabled: Boolean(normalizedEmail),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const { data: notices = [], isLoading: isLoadingNotices } = useQuery({
+    queryKey: queryKeys.common.notices('student', 8),
+    queryFn: () => getNotices({ role: 'student', limit: 8 }),
     staleTime: LIVE_STALE_TIME_MS,
   });
 
@@ -155,12 +169,38 @@ export const StudentDashboard = () => {
 
   const isDashboardLoading = isLoadingProfile || isLoadingAssignedClasses || isLoadingAttendance || isLoadingMarks;
 
-  const studentStats = [
-    { title: 'Overall Attendance', value: `${studentSummary.attendanceRate}%`, icon: ClipboardCheck, color: 'bg-green-500', progress: studentSummary.attendanceRate },
-    { title: 'Average Marks', value: `${studentSummary.averageMarks}`, icon: TrendingUp, color: 'bg-blue-500', progress: studentSummary.averageMarks },
-    { title: 'Enrolled Courses', value: `${studentSummary.enrolledCoursesCount}`, icon: BookOpen, color: 'bg-purple-500', progress: Math.min(100, studentSummary.enrolledCoursesCount * 20) },
-    { title: 'Assigned Classes', value: `${studentSummary.assignmentsCount}`, icon: Award, color: 'bg-orange-500', progress: Math.min(100, studentSummary.assignmentsCount * 20) },
-  ];
+  const attendanceTrendData = useMemo(() => {
+    const grouped = new Map();
+
+    attendanceRows.forEach((row) => {
+      if (!row.attendance_date) return;
+      if (!grouped.has(row.attendance_date)) {
+        grouped.set(row.attendance_date, { total: 0, present: 0 });
+      }
+
+      const current = grouped.get(row.attendance_date);
+      current.total += 1;
+      if (row.is_present) current.present += 1;
+    });
+
+    return Array.from(grouped.entries())
+      .sort((left, right) => left[0].localeCompare(right[0]))
+      .slice(-9)
+      .map(([date, values]) => {
+        const dateValue = new Date(`${date}T00:00:00`);
+        const percentage = values.total ? Number(((values.present / values.total) * 100).toFixed(1)) : 0;
+
+        return {
+          label: dateValue.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          value: percentage,
+        };
+      });
+  }, [attendanceRows]);
+
+  const courseFilterOptions = useMemo(
+    () => [...new Set(attendanceRows.map((row) => row.course_code).filter(Boolean))].sort(),
+    [attendanceRows]
+  );
 
   useEffect(() => {
     if (!normalizedEmail) return undefined;
@@ -213,29 +253,137 @@ export const StudentDashboard = () => {
       )
       .subscribe();
 
+    const timetableChannel = supabase
+      .channel(`student-timetable-${normalizedEmail}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'timetable_entries',
+        },
+        () => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.student.timetable(normalizedEmail, resolvedDepartment) });
+        }
+      )
+      .subscribe();
+
+    const noticesChannel = supabase
+      .channel('student-notices-live')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notices',
+        },
+        () => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.common.notices('student', 8) });
+        }
+      )
+      .subscribe();
+
     return () => {
       void supabase.removeChannel(assignmentChannel);
       void supabase.removeChannel(attendanceChannel);
       void supabase.removeChannel(marksChannel);
+      void supabase.removeChannel(timetableChannel);
+      void supabase.removeChannel(noticesChannel);
     };
   }, [normalizedEmail, queryClient, resolvedDepartment]);
 
-  const upcomingClasses = useMemo(
-    () =>
-      assignedClasses.map((assignment) => ({
-        course: `${assignment.course_code} - ${assignment.course_name}`,
-        room: assignment.venue || 'Venue not assigned',
-        assignedBy:
-          assignment.staff_name
-          || formatNameFromEmail(assignment.faculty_email)
-          || formatNameFromEmail(assignment.staff_email)
-          || assignment.faculty_email
-          || assignment.staff_email
-          || 'Faculty',
-        updatedAt: assignment.updated_at || null,
-      })),
-    [assignedClasses]
-  );
+  const upcomingActivities = useMemo(() => {
+    const now = new Date();
+
+    const assignmentActivities = assignedClasses.map((assignment, index) => {
+      const timestamp = assignment.updated_at ? new Date(assignment.updated_at) : now;
+      const isLive = now.getTime() - timestamp.getTime() <= 12 * 60 * 60 * 1000;
+
+      return {
+        id: `assignment-${assignment.course_code || index}-${assignment.updated_at || index}`,
+        type: 'assignment',
+        title: `${assignment.course_code || 'Course'} Assignment`,
+        subtitle: `${assignment.course_name || 'Course work'}${assignment.venue ? ` • ${assignment.venue}` : ''}`,
+        status: isLive ? 'Live' : 'Upcoming',
+        timeLabel: formatRelativeTime(timestamp.toISOString()),
+        sortDate: timestamp,
+      };
+    });
+
+    const classActivities = timetableRows
+      .map((entry) => {
+        const schedule = toDateFromDayAndTime(entry.dayOfWeek, entry.startTime, entry.endTime);
+        if (!schedule) return null;
+
+        const isLive = now >= schedule.start && now <= schedule.end;
+        const status = isLive ? 'Live' : schedule.start > now ? 'Upcoming' : 'Completed';
+
+        return {
+          id: `class-${entry.id}-${schedule.start.toISOString()}`,
+          type: 'class',
+          title: `${entry.courseCode || 'Course'}${entry.courseName ? ` - ${entry.courseName}` : ''}`,
+          subtitle: `${entry.dayOfWeek} ${entry.startTime}-${entry.endTime}${entry.venue ? ` • ${entry.venue}` : ''}`,
+          status,
+          timeLabel: isLive ? 'Live now' : formatRelativeTime(schedule.start.toISOString()),
+          sortDate: schedule.start,
+        };
+      })
+      .filter(Boolean);
+
+    const noticeActivities = notices.map((notice) => {
+      const startDate = notice.startDate ? new Date(`${notice.startDate}T00:00:00`) : now;
+      const endDate = notice.endDate ? new Date(`${notice.endDate}T23:59:59`) : null;
+
+      let status = 'Live';
+      if (startDate > now) status = 'Upcoming';
+      if (endDate && endDate < now) status = 'Completed';
+
+      return {
+        id: `notice-${notice.id}`,
+        type: 'notice',
+        title: notice.title || 'Notice',
+        subtitle: notice.body || 'Institution announcement',
+        status,
+        timeLabel: formatRelativeTime(startDate.toISOString()),
+        sortDate: startDate,
+      };
+    });
+
+    const attendanceActivities = recentAttendanceActivity.map((row, index) => {
+      const timestamp = row.created_at
+        ? new Date(row.created_at)
+        : row.attendance_date
+          ? new Date(`${row.attendance_date}T00:00:00`)
+          : now;
+
+      const isLive = now.getTime() - timestamp.getTime() < 2 * 60 * 60 * 1000;
+
+      return {
+        id: `attendance-${row.course_code || 'course'}-${row.attendance_date || index}`,
+        type: 'class',
+        title: `${row.course_code || 'Course'} attendance`,
+        subtitle: `${row.is_present ? 'Marked present' : 'Marked absent'}${row.faculty_email ? ` • ${row.faculty_email}` : ''}`,
+        status: isLive ? 'Live' : 'Completed',
+        timeLabel: formatRelativeTime(timestamp.toISOString()),
+        sortDate: timestamp,
+      };
+    });
+
+    const statusPriority = { Live: 0, Upcoming: 1, Completed: 2 };
+
+    return [...assignmentActivities, ...classActivities, ...noticeActivities, ...attendanceActivities]
+      .sort((left, right) => {
+        const statusDiff = statusPriority[left.status] - statusPriority[right.status];
+        if (statusDiff !== 0) return statusDiff;
+
+        if (left.status === 'Completed') {
+          return right.sortDate.getTime() - left.sortDate.getTime();
+        }
+
+        return left.sortDate.getTime() - right.sortDate.getTime();
+      })
+      .slice(0, 10);
+  }, [assignedClasses, notices, recentAttendanceActivity, timetableRows]);
 
   const recentActivityFeed = useMemo(
     () => (recentAttendanceActivity || []).map((row, index) => ({
@@ -243,27 +391,40 @@ export const StudentDashboard = () => {
       title: `${row.course_code || 'Course'}${row.course_name ? ` - ${row.course_name}` : ''}`,
       description: row.is_present ? 'Marked Present' : 'Marked Absent',
       facultyEmail: row.faculty_email || 'Faculty not set',
-      date: formatActivityTime(row.created_at),
+      date: formatRelativeTime(row.created_at),
       priority: row.is_present ? 'low' : 'high',
     })),
     [recentAttendanceActivity]
   );
 
   const glassCardSx = {
-    borderRadius: 3,
-    backdropFilter: 'blur(12px)',
-    backgroundColor: 'rgba(255,255,255,0.72)',
-    boxShadow: '0 10px 24px rgba(0,0,0,0.08)',
+    borderRadius: 4,
+    backdropFilter: 'blur(16px)',
+    backgroundColor: alpha(theme.palette.background.paper, 0.8),
+    boxShadow: '0 16px 40px rgba(15, 23, 42, 0.08)',
+    border: `1px solid ${alpha(theme.palette.common.white, 0.45)}`,
   };
 
   return (
-    <Box sx={{ p: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2.25 }}>
+    <Box
+      sx={{
+        p: { xs: 2, md: 3 },
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2.25,
+        background: 'radial-gradient(circle at 10% 0%, rgba(125,211,252,0.2), transparent 45%), radial-gradient(circle at 100% 90%, rgba(250,204,21,0.15), transparent 40%)',
+      }}
+    >
       <Box>
-        <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#111827' }}>Student Dashboard</Typography>
-        <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Track your academic progress and performance</Typography>
+        <Typography sx={{ fontSize: { xs: '1.65rem', md: '1.95rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#0f172a' }}>
+          Student Dashboard
+        </Typography>
+        <Typography sx={{ color: '#6b7280', mt: 0.5 }}>
+          Track your academic progress with a calendar-first experience.
+        </Typography>
       </Box>
 
-      <Card sx={{ ...glassCardSx, background: 'linear-gradient(120deg, #ecfeff 0%, #dbeafe 55%, #e0e7ff 100%)', border: '1px solid rgba(37,99,235,0.22)' }}>
+      <Card sx={{ ...glassCardSx, background: 'linear-gradient(125deg, #ecfeff 0%, #dbeafe 60%, #e0e7ff 100%)' }}>
         <CardContent sx={{ py: 2.2 }}>
           {isLoadingProfile ? (
             <Skeleton className="h-8 w-64" />
@@ -279,15 +440,18 @@ export const StudentDashboard = () => {
       </Card>
 
       {atRiskCourses.length > 0 && (
-        <Card sx={{ ...glassCardSx, border: '1px solid rgba(239,68,68,0.35)', backgroundColor: '#fff7f7' }}>
-          <CardHeader title="At Risk" subheader="Attendance below 75% detected" />
-          <CardContent sx={{ pt: 0 }}>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+        <Card sx={{ ...glassCardSx, border: '1px solid rgba(239,68,68,0.3)', backgroundColor: '#fff7f7' }}>
+          <CardContent>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.1 }}>
+              <AlertTriangle size={17} color="#b91c1c" />
+              <Typography sx={{ fontWeight: 700, color: '#7f1d1d' }}>Attendance Alerts</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.9 }}>
               {atRiskCourses.map((course) => (
                 <Chip
                   key={course.code}
                   label={`${course.code} (${course.attendance}%)`}
-                  sx={{ backgroundColor: '#fee2e2', color: '#b91c1c', fontWeight: 600 }}
+                  sx={{ backgroundColor: '#fee2e2', color: '#b91c1c', fontWeight: 700 }}
                 />
               ))}
             </Box>
@@ -295,218 +459,50 @@ export const StudentDashboard = () => {
         </Card>
       )}
 
-      <NoticesPanel
-        role="student"
-        title="Student Notices"
-        sx={glassCardSx}
-      />
-
       <Grid container spacing={2}>
-        {isDashboardLoading ? [0, 1, 2, 3].map((slot) => (
-          <Grid key={`stats-skeleton-${slot}`} size={{ xs: 12, sm: 6, md: 4 }}>
-            <Card sx={glassCardSx}>
-              <CardContent sx={{ p: 3 }}>
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-8 w-20 mt-3" />
-                <Skeleton className="h-2 w-full mt-4" />
-              </CardContent>
-            </Card>
-          </Grid>
-        )) : studentStats.map((stat, index) => {
-          const Icon = stat.icon;
-          return (
-            <Grid key={index} size={{ xs: 12, sm: 6, md: 4 }}>
-            <Card sx={glassCardSx}>
-              <CardContent sx={{ p: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-                  <Box>
-                    <Typography sx={{ fontSize: '0.875rem', color: '#4b5563' }}>{stat.title}</Typography>
-                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: '#111827', mt: 1 }}>{stat.value}</Typography>
-                  </Box>
-                  <Box sx={{ p: 1.5, borderRadius: 1.5, backgroundColor: stat.color === 'bg-green-500' ? '#22c55e' : stat.color === 'bg-blue-500' ? '#3b82f6' : stat.color === 'bg-purple-500' ? '#a855f7' : '#f97316' }}>
-                    <Icon size={24} color="#ffffff" />
-                  </Box>
-                </Box>
-                <LinearProgress variant="determinate" value={stat.progress} sx={{ height: 8, borderRadius: 99 }} />
-              </CardContent>
-            </Card>
-            </Grid>
-          );
-        })}
+        <StudentStats
+          loading={isDashboardLoading}
+          summary={studentSummary}
+          trendData={attendanceTrendData}
+        />
       </Grid>
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, lg: 8 }}>
-          <Card sx={glassCardSx}>
-            <CardHeader title="Enrolled Courses" />
-            <CardContent>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {isDashboardLoading && (
-                  <>
-                    <Skeleton className="h-24 w-full" />
-                    <Skeleton className="h-24 w-full" />
-                  </>
-                )}
-                {!isDashboardLoading && !courseCards.length && (
-                  <Typography sx={{ color: '#6b7280', fontSize: '0.875rem' }}>No course data available yet.</Typography>
-                )}
-                {!isDashboardLoading && courseCards.map((course) => (
-                  <Box key={course.id} sx={{ border: '1px solid #e5e7eb', borderRadius: 1.5, p: 2, '&:hover': { boxShadow: 2 } }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5 }}>
-                      <Box sx={{ flex: 1 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                          <Typography sx={{ fontWeight: 600, color: '#111827' }}>{course.name}</Typography>
-                          <Chip size="small" label={course.code} sx={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }} />
-                        </Box>
-                        <Typography sx={{ fontSize: '0.875rem', color: '#6b7280' }}>From attendance and marks records</Typography>
-                      </Box>
-                      <Box sx={{ textAlign: 'right' }}>
-                        <Typography sx={{ fontSize: '1.5rem', fontWeight: 700, color: '#2563eb' }}>{course.grade}</Typography>
-                        <Typography sx={{ fontSize: '0.75rem', color: '#6b7280' }}>Live Grade</Typography>
-                      </Box>
-                    </Box>
-                    <Grid container spacing={2}>
-                      <Grid size={6}>
-                        <Typography sx={{ fontSize: '0.75rem', color: '#6b7280', mb: 0.5 }}>Attendance</Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <LinearProgress variant="determinate" value={course.attendance} sx={{ flex: 1, height: 8, borderRadius: 99 }} />
-                          <Typography sx={{ fontSize: '0.875rem', fontWeight: 500, color: '#374151' }}>{course.attendance}%</Typography>
-                        </Box>
-                      </Grid>
-                      <Grid size={6}>
-                        <Typography sx={{ fontSize: '0.75rem', color: '#6b7280', mb: 0.5 }}>Marks</Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <LinearProgress variant="determinate" value={course.marks} sx={{ flex: 1, height: 8, borderRadius: 99 }} />
-                          <Typography sx={{ fontSize: '0.875rem', fontWeight: 500, color: '#374151' }}>{course.marks}%</Typography>
-                        </Box>
-                      </Grid>
-                    </Grid>
-                  </Box>
-                ))}
-              </Box>
-            </CardContent>
-          </Card>
+          <Suspense
+            fallback={(
+              <Card sx={glassCardSx}>
+                <CardContent sx={{ p: 2.2 }}>
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-96 w-full mt-3" />
+                </CardContent>
+              </Card>
+            )}
+          >
+            <AttendanceCalendar
+              attendanceRows={attendanceRows}
+              isLoading={isLoadingAttendance}
+              selectedCourse={selectedCourse}
+              onCourseChange={setSelectedCourse}
+              courseOptions={courseFilterOptions}
+            />
+          </Suspense>
         </Grid>
 
-        <Grid size={{ xs: 12, lg: 4 }} sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <Card sx={glassCardSx}>
-            <CardHeader
-              title="Upcoming Classes"
-              subheader="Live sync from faculty assignments"
-              sx={{
-                '& .MuiCardHeader-title': {
-                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif',
-                  fontWeight: 650,
-                  letterSpacing: '-0.01em',
-                },
-                '& .MuiCardHeader-subheader': {
-                  color: '#64748b',
-                },
-              }}
-            />
-            <CardContent>
-              {isLoadingAssignedClasses && (
-                <Typography sx={{ fontSize: '0.875rem', color: '#6b7280', mb: 1.5 }}>
-                  Loading assigned classes...
-                </Typography>
-              )}
-              {isLoadingAssignedClasses && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 1.5 }}>
-                  <Skeleton className="h-20 w-full" />
-                  <Skeleton className="h-20 w-full" />
-                </Box>
-              )}
+        <Grid size={{ xs: 12, lg: 4 }}>
+          <UpcomingActivities
+            activities={upcomingActivities}
+            isLoading={isLoadingAssignedClasses || isLoadingTimetable || isLoadingNotices || isLoadingRecentActivity}
+          />
+        </Grid>
+      </Grid>
 
-              {!isLoadingAssignedClasses && !upcomingClasses.length && (
-                <Typography sx={{ fontSize: '0.875rem', color: '#6b7280', mb: 1.5 }}>
-                  No class assignments yet.
-                </Typography>
-              )}
-
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                {upcomingClasses.map((classItem, index) => (
-                  <Box
-                    key={index}
-                    sx={{
-                      p: 1.75,
-                      borderRadius: 2.5,
-                      border: '1px solid rgba(148,163,184,0.28)',
-                      background: 'linear-gradient(145deg, rgba(255,255,255,0.90), rgba(241,245,249,0.75))',
-                      boxShadow: '0 10px 25px rgba(15, 23, 42, 0.08)',
-                      backdropFilter: 'blur(10px)',
-                      WebkitBackdropFilter: 'blur(10px)',
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.8 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                        <Calendar size={15} color="#2563eb" />
-                        <Typography
-                          sx={{
-                            fontWeight: 600,
-                            color: '#0f172a',
-                            fontSize: '0.88rem',
-                            fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          {classItem.course}
-                        </Typography>
-                      </Box>
-                      <Chip size="small" label="Live" sx={{ backgroundColor: '#dbeafe', color: '#1d4ed8', height: 22 }} />
-                    </Box>
-
-                    <Typography sx={{ fontSize: '0.77rem', color: '#475569' }}>{classItem.room}</Typography>
-                    <Typography sx={{ fontSize: '0.77rem', color: '#334155', mt: 0.35 }}>
-                      Assigned by: <Box component="span" sx={{ fontWeight: 600 }}>{classItem.assignedBy}</Box>
-                    </Typography>
-                    <Typography sx={{ fontSize: '0.72rem', color: '#94a3b8', mt: 0.45 }}>
-                      Updated {formatActivityTime(classItem.updatedAt)}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-            </CardContent>
-          </Card>
-
-          <Card sx={glassCardSx}>
-            <CardHeader title="Recent Activity" subheader="Latest attendance updates" />
-            <CardContent>
-              {isLoadingRecentActivity && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 1.5 }}>
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                </Box>
-              )}
-              {!isLoadingRecentActivity && !recentActivityFeed.length && (
-                <Typography sx={{ fontSize: '0.875rem', color: '#6b7280', mb: 1.5 }}>
-                  No activity updates yet.
-                </Typography>
-              )}
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                {!isLoadingRecentActivity && recentActivityFeed.map((activity) => (
-                  <Box key={activity.id} sx={{ p: 1.5, backgroundColor: '#f9fafb', borderRadius: 1.5 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5, gap: 1 }}>
-                      <Typography sx={{ fontWeight: 500, fontSize: '0.875rem', color: '#111827', flex: 1 }}>{activity.title}</Typography>
-                      <Chip
-                        size="small"
-                        label={activity.priority}
-                        sx={{
-                          fontSize: '0.75rem',
-                          backgroundColor: activity.priority === 'high' ? '#fee2e2' : '#dcfce7',
-                          color: activity.priority === 'high' ? '#b91c1c' : '#15803d',
-                        }}
-                      />
-                    </Box>
-                    <Typography sx={{ fontSize: '0.75rem', color: '#6b7280' }}>{activity.description}</Typography>
-                    <Typography sx={{ fontSize: '0.75rem', color: '#6b7280', mt: 0.4 }}>{activity.facultyEmail}</Typography>
-                    <Typography sx={{ fontSize: '0.75rem', color: '#9ca3af', mt: 0.5 }}>{activity.date}</Typography>
-                  </Box>
-                ))}
-              </Box>
-            </CardContent>
-          </Card>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, lg: 8 }}>
+          <CourseProgress courses={courseCards} isLoading={isDashboardLoading} />
+        </Grid>
+        <Grid size={{ xs: 12, lg: 4 }}>
+          <RecentActivity activities={recentActivityFeed} isLoading={isLoadingRecentActivity} />
         </Grid>
       </Grid>
     </Box>

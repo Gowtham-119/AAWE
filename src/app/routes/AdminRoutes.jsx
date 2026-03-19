@@ -3,15 +3,16 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { RoleGuard } from './ProtectedRoute.jsx';
 import { RouteErrorBoundary } from '../components/GlobalErrorBoundary.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton.jsx';
+import { lazyWithRetry } from '../lib/lazyWithRetry.js';
 
-const AppShell = React.lazy(() => import('../AppShell.jsx'));
-const AdminDashboard = React.lazy(() => import('../components/admin/AdminDashboard.js'));
-const AnalyticsPage = React.lazy(() => import('../components/admin/AnalyticsPage.js'));
-const ManageUsersPage = React.lazy(() => import('../components/admin/ManageUsersPage.js'));
-const ManageCoursesPage = React.lazy(() => import('../components/admin/ManageCoursesPage.js'));
-const ManageDepartmentsPage = React.lazy(() => import('../components/admin/ManageDepartmentsPage.js'));
-const ManageNoticesPage = React.lazy(() => import('../components/admin/ManageNoticesPage.js'));
-const AdminSettingsPage = React.lazy(() => import('../components/admin/AdminSettingsPage.js'));
+const AppShell = lazyWithRetry(() => import('../AppShell.jsx'), 'admin-app-shell');
+const AdminDashboard = lazyWithRetry(() => import('../components/admin/AdminDashboard.js'), 'admin-dashboard');
+const AnalyticsPage = lazyWithRetry(() => import('../components/admin/AnalyticsPage.js'), 'admin-analytics');
+const ManageUsersPage = lazyWithRetry(() => import('../components/admin/ManageUsersPage.js'), 'admin-users');
+const ManageCoursesPage = lazyWithRetry(() => import('../components/admin/ManageCoursesPage.js'), 'admin-courses');
+const ManageDepartmentsPage = lazyWithRetry(() => import('../components/admin/ManageDepartmentsPage.js'), 'admin-departments');
+const ManageNoticesPage = lazyWithRetry(() => import('../components/admin/ManageNoticesPage.js'), 'admin-notices');
+const AdminSettingsPage = lazyWithRetry(() => import('../components/admin/AdminSettingsPage.js'), 'admin-settings');
 
 const AdminRoutes = () => (
   <React.Suspense fallback={<PageSkeleton />}>
