@@ -2,18 +2,18 @@
 
 AAWE is organized as a single repository with two main folders:
 
-- `client`: React frontend application
-- `server`: backend support assets (database setup SQL, seed scripts, admin scripts)
+- `frontend`: React frontend application
+- `backend`: backend support assets (database setup SQL, seed scripts, admin scripts)
 
 ## Repository Structure
 
 ```text
 AAWE/
-	client/
+	frontend/
 		src/
 		public/
 		package.json
-	server/
+	backend/
 		scripts/
 		guidelines/
 ```
@@ -23,12 +23,12 @@ AAWE/
 - Node.js 18+
 - npm
 
-## Run Frontend (Client)
+## Run Frontend
 
 From the project root:
 
 ```powershell
-cd client
+cd frontend
 npm install
 npm start
 ```
@@ -40,27 +40,27 @@ The app runs on the default React dev server URL:
 ## Build Frontend
 
 ```powershell
-cd client
+cd frontend
 npm run build
 ```
 
 ## Backend Folder Notes
 
-The `server` folder currently contains project backend resources, not a standalone API server framework.
+The `backend` folder currently contains project backend resources, not a standalone API server framework.
 
-- `server/scripts`: utility scripts for Supabase checks/setup/import/seed
-- `server/guidelines`: setup guide and SQL files
+- `backend/scripts`: utility scripts for Supabase checks/setup/import/seed
+- `backend/guidelines`: setup guide and SQL files
 
 Run a script from the root like this:
 
 ```powershell
-node server/scripts/checkSupabase.js
+node backend/scripts/checkSupabase.js
 ```
 
 ## Supabase Setup Files
 
-- `server/guidelines/SupabaseSetup.sql`
-- `server/guidelines/SupabaseSampleData.sql`
-- `server/guidelines/Guidelines.md`
+- `backend/guidelines/SupabaseSetup.sql`
+- `backend/guidelines/SupabaseSampleData.sql`
+- `backend/guidelines/Guidelines.md`
 
 Use the SQL files in Supabase SQL editor, then use scripts as needed.
