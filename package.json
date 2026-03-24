@@ -1,0 +1,13 @@
+{
+  "name": "aawe-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "start": "npm --prefix frontend start",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix frontend test",
+    "backend:check": "node backend/scripts/checkSupabase.js",
+    "backend:setup-admin": "node backend/scripts/setupAdminAccount.js",
+    "backend:seed": "node backend/scripts/seedSupabaseSampleData.js"
+  }
+}
