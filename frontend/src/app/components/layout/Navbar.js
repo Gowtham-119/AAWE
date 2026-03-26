@@ -18,12 +18,11 @@ import {
 	Typography,
 	Tooltip,
 } from '@mui/material';
-import { Bell, Menu, Search, Moon, Sun } from 'lucide-react';
+import { Bell, Menu, Search } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 import { getNotifications, markAllNotificationsRead } from '../../lib/academicDataApi';
 import { LIVE_STALE_TIME_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
-import { useThemeMode } from '../../context/ThemeModeContext.js';
 
 const TYPE_DOT_COLORS = {
 	info: '#2563eb',
@@ -34,7 +33,6 @@ const TYPE_DOT_COLORS = {
 
 const Navbar = ({ onToggleSidebar, user }) => {
 	const { institutionName } = useAuth();
-	const { themeMode, toggleThemeMode } = useThemeMode();
 	const isStudent = user?.role === 'student';
 	const initials = (user?.name || 'User')
 		.split(' ')
@@ -110,11 +108,6 @@ const Navbar = ({ onToggleSidebar, user }) => {
 
 	const bellButton = (
 		<>
-			<Tooltip title={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
-				<IconButton onClick={toggleThemeMode} size="small" sx={{ color: '#6b7280' }}>
-					{themeMode === 'dark' ? <Sun size={19} /> : <Moon size={19} />}
-				</IconButton>
-			</Tooltip>
 			<IconButton onClick={handleBellClick} size="small" sx={{ color: '#6b7280' }}>
 				<Badge badgeContent={unreadCount || null} color="error" max={99}>
 					<Bell size={20} />

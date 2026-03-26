@@ -412,10 +412,11 @@ export const StudentDashboard = () => {
         display: 'flex',
         flexDirection: 'column',
         gap: 2.25,
+        alignItems: 'stretch',
         background: 'radial-gradient(circle at 10% 0%, rgba(125,211,252,0.2), transparent 45%), radial-gradient(circle at 100% 90%, rgba(250,204,21,0.15), transparent 40%)',
       }}
     >
-      <Box>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
         <Typography sx={{ fontSize: { xs: '1.65rem', md: '1.95rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#0f172a' }}>
           Student Dashboard
         </Typography>

@@ -5,7 +5,6 @@ import { getSystemSettings, saveSystemSettings } from '../../lib/academicDataApi
 import { queryKeys } from '../../lib/queryKeys';
 import { STATIC_STALE_TIME_MS } from '../../lib/queryClient';
 import { toast } from 'sonner';
-import { useThemeMode } from '../../context/ThemeModeContext.js';
 
 const SAVE_DEBOUNCE_MS = 700;
 
@@ -24,7 +23,6 @@ const parseNumber = (value, fallback = 0) => {
 };
 
 const AdminSettingsPage = () => {
-  const { themeMode, toggleThemeMode } = useThemeMode();
   const queryClient = useQueryClient();
   const [settings, setSettings] = useState({
     maintenance_mode: false,
@@ -138,12 +136,6 @@ const AdminSettingsPage = () => {
               <FormControlLabel
                 control={<Switch checked={Boolean(settings.maintenance_mode)} onChange={(_event, checked) => updateSetting('maintenance_mode', checked)} />}
                 label={<Box sx={{ display: 'inline-flex', alignItems: 'center' }}>Maintenance mode {renderStatus('maintenance_mode')}</Box>}
-              />
-            </Grid>
-            <Grid size={{ xs: 12 }}>
-              <FormControlLabel
-                control={<Switch checked={themeMode === 'dark'} onChange={toggleThemeMode} />}
-                label="Dark Mode (saved as personal preference)"
               />
             </Grid>
             <Grid size={{ xs: 12 }}>

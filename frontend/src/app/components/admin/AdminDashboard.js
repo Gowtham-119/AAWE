@@ -98,8 +98,8 @@ export const AdminDashboard = () => {
   };
 
   return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <Box>
+    <Box sx={{ p: { xs: 2, md: 3 }, display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'stretch' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
         <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827' }}>Admin Dashboard</Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Access management overview connected to user login activity</Typography>
       </Box>
@@ -109,8 +109,8 @@ export const AdminDashboard = () => {
           <Grid key={i} size={{ xs: 12, sm: 6, md: 4 }}>
             <Card sx={glassCardSx}>
               <CardContent sx={{ p: 3 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5 }}>
+                  <Box sx={{ textAlign: 'left' }}>
                     <Typography sx={{ fontSize: '0.875rem', color: '#4b5563' }}>{stat.title}</Typography>
                     <Typography sx={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827', mt: 1 }}>{stat.value}</Typography>
                     <Typography sx={{ fontSize: '0.875rem', color: '#6b7280', mt: 1 }}>{stat.description}</Typography>

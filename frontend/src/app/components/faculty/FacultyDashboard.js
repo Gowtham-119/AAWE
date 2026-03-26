@@ -392,8 +392,8 @@ export const FacultyDashboard = () => {
   };
 
   return (
-    <Box sx={{ p: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', gap: 2.25, background: 'radial-gradient(circle at 0% 0%, rgba(186,230,253,0.20), transparent 34%), radial-gradient(circle at 100% 100%, rgba(221,214,254,0.20), transparent 34%)' }}>
-      <Box>
+    <Box sx={{ p: { xs: 2, md: 3 }, display: 'flex', flexDirection: 'column', gap: 2.25, alignItems: 'stretch', background: 'radial-gradient(circle at 0% 0%, rgba(186,230,253,0.20), transparent 34%), radial-gradient(circle at 100% 100%, rgba(221,214,254,0.20), transparent 34%)' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
         <Typography sx={{ fontSize: { xs: '1.6rem', md: '1.85rem' }, fontWeight: 700, letterSpacing: '-0.02em', color: '#111827' }}>Faculty Dashboard</Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>Manage your courses and student progress</Typography>
       </Box>
@@ -411,8 +411,8 @@ export const FacultyDashboard = () => {
             <Grid key={index} size={{ xs: 12, sm: 6, md: 4 }}>
               <Card sx={{ ...glassCardSx, background: stat.cardBg }}>
                 <CardContent sx={{ p: 2.25 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5 }}>
+                    <Box sx={{ textAlign: 'left' }}>
                       <Typography sx={{ fontSize: '0.88rem', color: '#475569' }}>{stat.title}</Typography>
                       <Typography sx={{ fontSize: '2.05rem', fontWeight: 700, color: '#0f172a', mt: 0.45, lineHeight: 1 }}>{stat.value}</Typography>
                       <Typography sx={{ fontSize: '0.80rem', color: '#64748b', mt: 1 }}>{stat.description}</Typography>
