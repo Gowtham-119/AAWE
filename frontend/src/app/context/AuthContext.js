@@ -61,7 +61,7 @@ const resolveAdminIdentifierToEmail = async (identifier) => {
   if (!normalized) return '';
 
   if (normalized.toLowerCase() === 'admin') {
-    return 'gowthamkrish1013l@gmail.com';
+    return 'admin@university.edu';
   }
 
   if (normalized.includes('@')) {

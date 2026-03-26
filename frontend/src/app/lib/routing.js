@@ -27,6 +27,7 @@ export const getSidebarMenuItems = (role) => {
   if (role === 'faculty') {
     return [
       { id: 'dashboard', label: 'Dashboard', path: '/faculty/dashboard' },
+      { id: 'timetable', label: 'My Timetable', path: '/faculty/timetable' },
       { id: 'attendance', label: 'Attendance Entry', path: '/faculty/attendance' },
       { id: 'marks', label: 'Marks Entry', path: '/faculty/marks' },
       { id: 'profile', label: 'Profile', path: '/faculty/profile' },
@@ -35,6 +36,7 @@ export const getSidebarMenuItems = (role) => {
 
   return [
     { id: 'dashboard', label: 'Dashboard', path: '/student/dashboard' },
+    { id: 'timetable', label: 'My Timetable', path: '/student/timetable' },
     { id: 'courses', label: 'My Courses', path: '/student/courses' },
     { id: 'attendance', label: 'My Attendance', path: '/student/attendance' },
     { id: 'marks', label: 'My Marks', path: '/student/marks' },

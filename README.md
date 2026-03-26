@@ -64,18 +64,3 @@ node backend/scripts/checkSupabase.js
 - `backend/guidelines/Guidelines.md`
 
 Use the SQL files in Supabase SQL editor, then use scripts as needed.
-
-## Quick Deploy on Vercel (Review)
-
-This repository includes `vercel.json` so you can deploy from the repo root.
-
-### Steps
-
-1. Push this repository to GitHub.
-2. In Vercel, click **Add New Project** and import the repository.
-3. In project settings, add environment variables:
-	- `REACT_APP_SUPABASE_URL`
-	- `REACT_APP_SUPABASE_ANON_KEY`
-4. Deploy.
-
-The configuration builds `frontend` and serves `frontend/build` with SPA rewrite support, so routes like `/admin/users` and `/student/dashboard` open correctly on refresh.

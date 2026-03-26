@@ -30,7 +30,7 @@ const RecentActivity = ({ activities, isLoading }) => {
     >
       <CardHeader
         title="Recent Activity"
-        subheader="What happened in your latest attendance updates"
+        subheader="Latest attendance updates"
         sx={{
           '& .MuiCardHeader-title': { fontWeight: 700, fontSize: '1rem', color: '#0f172a' },
           '& .MuiCardHeader-subheader': { color: '#64748b', fontSize: '0.83rem' },

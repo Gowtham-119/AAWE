@@ -25,7 +25,6 @@ import {
 import { ArrowUpDown, Search, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import {
-  getDepartmentCourses,
   getStudents,
   getAttendanceForCourseDate,
   getSystemSettings,
@@ -49,15 +48,12 @@ export const AttendancePage = () => {
   const [saveSummary, setSaveSummary] = useState('');
   const [page, setPage] = useState(0);
 
-  const facultyDepartment = (user?.department || '').trim().toUpperCase();
-  const courseDepartment = selectedDepartment !== 'ALL' ? selectedDepartment : facultyDepartment;
-
-  const { data: courses = [] } = useQuery({
-    queryKey: ['faculty-attendance-courses', courseDepartment],
-    queryFn: () => getDepartmentCourses(courseDepartment),
-    enabled: Boolean(courseDepartment),
-    staleTime: LIVE_STALE_TIME_MS,
-  });
+  const courses = [
+    { code: 'CS301', name: 'Data Structures & Algorithms' },
+    { code: 'CS402', name: 'Database Management Systems' },
+    { code: 'CS303', name: 'Operating Systems' },
+    { code: 'CS501', name: 'Software Engineering' },
+  ];
 
   const [students, setStudents] = useState([]);
 
@@ -164,18 +160,6 @@ export const AttendancePage = () => {
   useEffect(() => {
     setPage(0);
   }, [selectedDepartment, searchTerm]);
-
-  useEffect(() => {
-    if (!courses.length) {
-      setSelectedCourse('');
-      return;
-    }
-
-    setSelectedCourse((previousCourseCode) => {
-      if (courses.some((course) => course.code === previousCourseCode)) return previousCourseCode;
-      return courses[0].code;
-    });
-  }, [courses]);
 
   useEffect(() => {
     if (!selectedDate) return;
