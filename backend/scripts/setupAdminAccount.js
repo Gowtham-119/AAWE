@@ -1,6 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 
-const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://nrrkwzjxjgvjnoiyeghc.supabase.co';
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseServiceKey) {
@@ -9,11 +9,23 @@ if (!supabaseServiceKey) {
   process.exit(1);
 }
 
+if (!supabaseUrl) {
+  console.error('❌ REACT_APP_SUPABASE_URL environment variable is required');
+  console.error('Set it before running this script: export REACT_APP_SUPABASE_URL="your_supabase_url"');
+  process.exit(1);
+}
+
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'gowthamkrish1013l@gmail.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Gowtham@123';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ADMIN_DISPLAY_NAME = 'Admin User';
+
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  console.error('❌ ADMIN_EMAIL and ADMIN_PASSWORD environment variables are required');
+  console.error('Set them before running this script.');
+  process.exit(1);
+}
 
 async function setupAdminAccount() {
   try {
