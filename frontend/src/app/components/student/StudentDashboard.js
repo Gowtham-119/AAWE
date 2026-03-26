@@ -1,16 +1,14 @@
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
   Card,
   CardContent,
-  Chip,
   Grid,
   Typography,
   alpha,
   useTheme,
 } from '@mui/material';
-import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import {
   getAttendanceByStudentEmail,
@@ -35,14 +33,11 @@ import {
   toDateFromDayAndTime,
 } from '../student-dashboard/dashboardUtils.js';
 
-const AttendanceCalendar = lazy(() => import('../student-dashboard/AttendanceCalendar.jsx'));
-
 export const StudentDashboard = () => {
   const theme = useTheme();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const normalizedEmail = (user?.email || '').trim().toLowerCase();
-  const [selectedCourse, setSelectedCourse] = useState('');
 
   const { data: profileData, isLoading: isLoadingProfile } = useQuery({
     queryKey: queryKeys.student.profile(normalizedEmail),
@@ -156,11 +151,6 @@ export const StudentDashboard = () => {
     });
   }, [attendanceRows, marksRows]);
 
-  const atRiskCourses = useMemo(
-    () => courseCards.filter((course) => Number(course.attendance || 0) < 75),
-    [courseCards]
-  );
-
   const studentDisplayName = useMemo(() => {
     const profileName = (profileData?.name || '').trim();
     if (profileName) return profileName;
@@ -168,39 +158,6 @@ export const StudentDashboard = () => {
   }, [profileData?.name, normalizedEmail]);
 
   const isDashboardLoading = isLoadingProfile || isLoadingAssignedClasses || isLoadingAttendance || isLoadingMarks;
-
-  const attendanceTrendData = useMemo(() => {
-    const grouped = new Map();
-
-    attendanceRows.forEach((row) => {
-      if (!row.attendance_date) return;
-      if (!grouped.has(row.attendance_date)) {
-        grouped.set(row.attendance_date, { total: 0, present: 0 });
-      }
-
-      const current = grouped.get(row.attendance_date);
-      current.total += 1;
-      if (row.is_present) current.present += 1;
-    });
-
-    return Array.from(grouped.entries())
-      .sort((left, right) => left[0].localeCompare(right[0]))
-      .slice(-9)
-      .map(([date, values]) => {
-        const dateValue = new Date(`${date}T00:00:00`);
-        const percentage = values.total ? Number(((values.present / values.total) * 100).toFixed(1)) : 0;
-
-        return {
-          label: dateValue.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          value: percentage,
-        };
-      });
-  }, [attendanceRows]);
-
-  const courseFilterOptions = useMemo(
-    () => [...new Set(attendanceRows.map((row) => row.course_code).filter(Boolean))].sort(),
-    [attendanceRows]
-  );
 
   useEffect(() => {
     if (!normalizedEmail) return undefined;
@@ -386,14 +343,30 @@ export const StudentDashboard = () => {
   }, [assignedClasses, notices, recentAttendanceActivity, timetableRows]);
 
   const recentActivityFeed = useMemo(
-    () => (recentAttendanceActivity || []).map((row, index) => ({
-      id: `${row.course_code || 'course'}-${row.attendance_date || index}`,
-      title: `${row.course_code || 'Course'}${row.course_name ? ` - ${row.course_name}` : ''}`,
-      description: row.is_present ? 'Marked Present' : 'Marked Absent',
-      facultyEmail: row.faculty_email || 'Faculty not set',
-      date: formatRelativeTime(row.created_at),
-      priority: row.is_present ? 'low' : 'high',
-    })),
+    () => (recentAttendanceActivity || []).map((row, index) => {
+      const timestamp = row.created_at
+        ? new Date(row.created_at)
+        : row.attendance_date
+          ? new Date(`${row.attendance_date}T00:00:00`)
+          : null;
+
+      const happenedDate = row.attendance_date
+        ? new Date(`${row.attendance_date}T00:00:00`).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })
+        : 'Unknown date';
+
+      return {
+        id: `${row.course_code || 'course'}-${row.attendance_date || index}`,
+        title: `${row.course_code || 'Course'}${row.course_name ? ` - ${row.course_name}` : ''}`,
+        description: `${row.is_present ? 'Present marked' : 'Absent marked'} on ${happenedDate}`,
+        facultyEmail: `Updated by: ${row.faculty_email || 'Faculty not set'}`,
+        date: timestamp ? formatRelativeTime(timestamp.toISOString()) : 'Just now',
+        priority: row.is_present ? 'low' : 'high',
+      };
+    }),
     [recentAttendanceActivity]
   );
 
@@ -420,7 +393,7 @@ export const StudentDashboard = () => {
           Student Dashboard
         </Typography>
         <Typography sx={{ color: '#6b7280', mt: 0.5 }}>
-          Track your academic progress with a calendar-first experience.
+          Track your academic progress with attendance, marks and course insights.
         </Typography>
       </Box>
 
@@ -439,57 +412,15 @@ export const StudentDashboard = () => {
         </CardContent>
       </Card>
 
-      {atRiskCourses.length > 0 && (
-        <Card sx={{ ...glassCardSx, border: '1px solid rgba(239,68,68,0.3)', backgroundColor: '#fff7f7' }}>
-          <CardContent>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.1 }}>
-              <AlertTriangle size={17} color="#b91c1c" />
-              <Typography sx={{ fontWeight: 700, color: '#7f1d1d' }}>Attendance Alerts</Typography>
-            </Box>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.9 }}>
-              {atRiskCourses.map((course) => (
-                <Chip
-                  key={course.code}
-                  label={`${course.code} (${course.attendance}%)`}
-                  sx={{ backgroundColor: '#fee2e2', color: '#b91c1c', fontWeight: 700 }}
-                />
-              ))}
-            </Box>
-          </CardContent>
-        </Card>
-      )}
-
       <Grid container spacing={2}>
         <StudentStats
           loading={isDashboardLoading}
           summary={studentSummary}
-          trendData={attendanceTrendData}
         />
       </Grid>
 
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, lg: 8 }}>
-          <Suspense
-            fallback={(
-              <Card sx={glassCardSx}>
-                <CardContent sx={{ p: 2.2 }}>
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-96 w-full mt-3" />
-                </CardContent>
-              </Card>
-            )}
-          >
-            <AttendanceCalendar
-              attendanceRows={attendanceRows}
-              isLoading={isLoadingAttendance}
-              selectedCourse={selectedCourse}
-              onCourseChange={setSelectedCourse}
-              courseOptions={courseFilterOptions}
-            />
-          </Suspense>
-        </Grid>
-
-        <Grid size={{ xs: 12, lg: 4 }}>
+        <Grid size={{ xs: 12 }}>
           <UpcomingActivities
             activities={upcomingActivities}
             isLoading={isLoadingAssignedClasses || isLoadingTimetable || isLoadingNotices || isLoadingRecentActivity}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
@@ -9,7 +9,6 @@ import {
   Chip,
   Grid,
   LinearProgress,
-  Tooltip,
   Typography
 } from '@mui/material';
 import {
@@ -19,22 +18,26 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
-import { getAttendanceByStudentEmail } from '../../lib/academicDataApi';
+import { getAttendanceByStudentEmail, getClassAssignmentsByStudentEmail } from '../../lib/academicDataApi';
 import { LIVE_STALE_TIME_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
 import { supabase } from '../../lib/supabaseClient.js';
-import { Calendar as AttendanceCalendar } from '../ui/calendar';
 
 const StudentAttendancePage = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const normalizedEmail = (user?.email || '').trim().toLowerCase();
-  const [calendarMonth, setCalendarMonth] = useState(new Date());
-  const [selectedTooltipDate, setSelectedTooltipDate] = useState(null);
 
   const { data: attendanceRows = [], isLoading } = useQuery({
     queryKey: queryKeys.student.attendance(normalizedEmail),
     queryFn: () => getAttendanceByStudentEmail(normalizedEmail),
+    enabled: Boolean(normalizedEmail),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
+  const { data: assignedCourses = [] } = useQuery({
+    queryKey: ['student-attendance-assigned-courses', normalizedEmail],
+    queryFn: () => getClassAssignmentsByStudentEmail(normalizedEmail, user?.department || ''),
     enabled: Boolean(normalizedEmail),
     staleTime: LIVE_STALE_TIME_MS,
   });
@@ -50,7 +53,7 @@ const StudentAttendancePage = () => {
   useEffect(() => {
     if (!normalizedEmail) return undefined;
 
-    const channel = supabase
+    const attendanceChannel = supabase
       .channel(`student-attendance-live-${normalizedEmail}`)
       .on(
         'postgres_changes',
@@ -61,52 +64,88 @@ const StudentAttendancePage = () => {
       )
       .subscribe();
 
+    const assignmentsChannel = supabase
+      .channel(`student-attendance-assignments-${normalizedEmail}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'class_assignments' },
+        () => {
+          void queryClient.invalidateQueries({ queryKey: ['student-attendance-assigned-courses', normalizedEmail] });
+        }
+      )
+      .subscribe();
+
     return () => {
-      void supabase.removeChannel(channel);
+      void supabase.removeChannel(attendanceChannel);
+      void supabase.removeChannel(assignmentsChannel);
     };
   }, [normalizedEmail, queryClient]);
 
   const courses = useMemo(() => {
-    const grouped = attendanceRows.reduce((acc, row) => {
-      if (!acc[row.course_code]) {
-        acc[row.course_code] = {
-          id: row.course_code,
-          name: row.course_name || row.course_code,
-          code: row.course_code,
+    const assignmentRows = Array.isArray(assignedCourses) ? assignedCourses : [];
+    const grouped = new Map();
+
+    assignmentRows.forEach((row) => {
+      const courseCode = (row.course_code || '').trim().toUpperCase();
+      if (!courseCode || grouped.has(courseCode)) return;
+
+      grouped.set(courseCode, {
+        id: courseCode,
+        name: row.course_name || courseCode,
+        code: courseCode,
+        instructor: row.faculty_email || row.staff_email || 'Faculty',
+        totalClasses: 0,
+        attended: 0,
+        percentage: 0,
+        status: 'critical',
+      });
+    });
+
+    (attendanceRows || []).forEach((row) => {
+      const courseCode = (row.course_code || '').trim().toUpperCase();
+      if (!courseCode) return;
+
+      if (!grouped.has(courseCode)) {
+        grouped.set(courseCode, {
+          id: courseCode,
+          name: row.course_name || courseCode,
+          code: courseCode,
           instructor: row.faculty_email || 'Faculty',
           totalClasses: 0,
           attended: 0,
           percentage: 0,
-          status: 'good',
-        };
+          status: 'critical',
+        });
       }
 
-      acc[row.course_code].totalClasses += 1;
+      const current = grouped.get(courseCode);
+      current.totalClasses += 1;
       if (row.is_present) {
-        acc[row.course_code].attended += 1;
+        current.attended += 1;
       }
+    });
 
-      return acc;
-    }, {});
-
-    return Object.values(grouped).map((course) => {
+    return Array.from(grouped.values()).map((course) => {
       const percentage = course.totalClasses
         ? (course.attended / course.totalClasses) * 100
         : 0;
 
-      const status = percentage >= 85 ? 'good' : percentage >= 75 ? 'warning' : 'critical';
+      const status = course.totalClasses > 0 ? 'present' : 'critical';
 
       return {
         ...course,
         percentage: Number(percentage.toFixed(1)),
         status,
       };
-    });
-  }, [attendanceRows]);
+    }).sort((left, right) => left.code.localeCompare(right.code));
+  }, [assignedCourses, attendanceRows]);
 
   const recentAttendance = useMemo(
     () =>
-      attendanceRows.slice(0, 10).map((row) => ({
+      [...attendanceRows]
+        .sort((left, right) => String(right.attendance_date || '').localeCompare(String(left.attendance_date || '')))
+        .slice(0, 10)
+        .map((row) => ({
         date: new Date(row.attendance_date).toLocaleDateString('en-US', {
           month: 'short',
           day: 'numeric',
@@ -118,53 +157,8 @@ const StudentAttendancePage = () => {
     [attendanceRows]
   );
 
-  const attendanceByDate = useMemo(() => {
-    const map = new Map();
-
-    attendanceRows.forEach((row) => {
-      const key = row.attendance_date;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(row);
-    });
-
-    return map;
-  }, [attendanceRows]);
-
-  const presentDates = useMemo(
-    () => Array.from(attendanceByDate.entries())
-      .filter(([, rows]) => rows.some((row) => row.is_present) && !rows.some((row) => !row.is_present))
-      .map(([date]) => new Date(`${date}T00:00:00`)),
-    [attendanceByDate]
-  );
-
-  const absentDates = useMemo(
-    () => Array.from(attendanceByDate.entries())
-      .filter(([, rows]) => rows.some((row) => !row.is_present))
-      .map(([date]) => new Date(`${date}T00:00:00`)),
-    [attendanceByDate]
-  );
-
-  const tooltipTextByDate = useMemo(() => {
-    const map = new Map();
-
-    attendanceByDate.forEach((rows, dateKey) => {
-      const primary = rows[0];
-      const status = primary?.is_present ? 'Present' : 'Absent';
-      const courseText = primary?.course_code || 'N/A';
-      const markedBy = primary?.faculty_email || 'N/A';
-      const multiCourseSuffix = rows.length > 1 ? ` (+${rows.length - 1} more)` : '';
-
-      map.set(
-        dateKey,
-        `Course: ${courseText}${multiCourseSuffix} | Status: ${status} | Marked by: ${markedBy}`
-      );
-    });
-
-    return map;
-  }, [attendanceByDate]);
-
   const condonationCourses = useMemo(
-    () => courses.filter((course) => course.percentage < 75),
+    () => courses.filter((course) => course.totalClasses > 0 && course.percentage < 75),
     [courses]
   );
 
@@ -174,20 +168,11 @@ const StudentAttendancePage = () => {
 
   const getStatusStyle = (status) => {
     switch (status) {
-      case 'good':
-        return { bg: '#dcfce7', color: '#15803d', label: 'Good Standing' };
-      case 'warning':
-        return { bg: '#fef3c7', color: '#a16207', label: 'Needs Improvement' };
+      case 'present':
+        return { bg: '#dcfce7', color: '#15803d', label: 'Present' };
       default:
         return { bg: '#fee2e2', color: '#b91c1c', label: 'Critical' };
     }
-  };
-
-  const formatDateKey = (date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
   };
 
   return (
@@ -257,7 +242,7 @@ const StudentAttendancePage = () => {
                 <Box>
                   <Typography variant="body2">Below 85%</Typography>
                   <Typography variant="h6">
-                    {courses.filter(c => c.percentage < 85).length}
+                    {courses.filter((c) => c.totalClasses > 0 && c.percentage < 85).length}
                   </Typography>
                 </Box>
               </Box>
@@ -268,17 +253,17 @@ const StudentAttendancePage = () => {
       </Grid>
 
       <Grid container spacing={2}>
-        {/* Course-wise Attendance */}
-        <Grid size={{ xs: 12, lg: 7 }}>
+        {/* Subject-wise Attendance */}
+        <Grid size={{ xs: 12 }}>
           <Card sx={glassCardSx}>
-            <CardHeader title="Course-wise Attendance" />
+            <CardHeader title="Subject-wise Attendance" subheader="Attendance for each subject" />
             <CardContent>
               {isLoading && (
                 <Typography sx={{ mb: 2, color: '#6b7280' }}>Loading attendance...</Typography>
               )}
               {!isLoading && courses.length === 0 && (
                 <Typography sx={{ mb: 2, color: '#6b7280' }}>
-                  No attendance records found in database for {user?.email}.
+                  No assigned courses found for {user?.email}.
                 </Typography>
               )}
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -333,79 +318,12 @@ const StudentAttendancePage = () => {
                         value={course.percentage}
                         sx={{ height: 8, borderRadius: 99 }}
                       />
+                      <Typography sx={{ mt: 0.75, fontSize: '0.8rem', color: '#475569' }}>
+                        {course.percentage}% attendance
+                      </Typography>
                     </Box>
                   );
                 })}
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid size={{ xs: 12, lg: 5 }}>
-          <Card sx={glassCardSx}>
-            <CardHeader title="Monthly Attendance Calendar" />
-            <CardContent>
-              <AttendanceCalendar
-                mode="single"
-                month={calendarMonth}
-                onMonthChange={setCalendarMonth}
-                toMonth={new Date()}
-                onDayClick={(day) => setSelectedTooltipDate(day)}
-                modifiers={{
-                  present: presentDates,
-                  absent: absentDates,
-                  noClass: (date) => !attendanceByDate.has(formatDateKey(date)),
-                  selectedInfo: (date) => {
-                    if (!selectedTooltipDate) return false;
-                    return formatDateKey(date) === formatDateKey(selectedTooltipDate);
-                  },
-                }}
-                modifiersStyles={{
-                  present: {
-                    backgroundColor: '#dcfce7',
-                    color: '#166534',
-                    borderRadius: 6,
-                  },
-                  absent: {
-                    backgroundColor: '#fee2e2',
-                    color: '#991b1b',
-                    borderRadius: 6,
-                  },
-                  noClass: {
-                    backgroundColor: '#e5e7eb',
-                    color: '#4b5563',
-                    borderRadius: 6,
-                  },
-                  selectedInfo: {
-                    outline: '2px solid #2563eb',
-                    outlineOffset: '-2px',
-                  },
-                }}
-                components={{
-                  DayContent: ({ date }) => {
-                    const key = formatDateKey(date);
-                    const title = tooltipTextByDate.get(key) || 'Course: N/A | Status: No class | Marked by: N/A';
-                    const isOpen = selectedTooltipDate && formatDateKey(selectedTooltipDate) === key;
-                    return (
-                      <Tooltip
-                        title={title}
-                        arrow
-                        open={Boolean(isOpen)}
-                        disableFocusListener
-                        disableHoverListener
-                        disableTouchListener
-                      >
-                        <span>{date.getDate()}</span>
-                      </Tooltip>
-                    );
-                  },
-                }}
-              />
-
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1.5 }}>
-                <Chip size="small" label="Present" sx={{ backgroundColor: '#dcfce7', color: '#166534' }} />
-                <Chip size="small" label="Absent" sx={{ backgroundColor: '#fee2e2', color: '#991b1b' }} />
-                <Chip size="small" label="No Class" sx={{ backgroundColor: '#e5e7eb', color: '#4b5563' }} />
               </Box>
             </CardContent>
           </Card>

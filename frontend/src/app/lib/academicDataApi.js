@@ -86,6 +86,22 @@ const getSemesterContext = async () => {
   };
 };
 
+const addOneHourToTime = (startTime) => {
+  const [hoursText, minutesText] = String(startTime || '').split(':');
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    throw new Error('Start time must be in HH:MM format.');
+  }
+
+  const startMinutes = (hours * 60) + minutes;
+  const endMinutes = (startMinutes + 60) % (24 * 60);
+  const endHours = Math.floor(endMinutes / 60);
+  const endMins = endMinutes % 60;
+  return `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}:00`;
+};
+
 const auditSafe = (value) => {
   if (value === undefined) return null;
   return value;
@@ -375,6 +391,8 @@ export const assignClassToDepartment = async ({
   actorEmail,
   actorRole,
   targetStudentEmails,
+  dayOfWeek,
+  startTime,
 }) => {
   const { semester, academicYear } = await getSemesterContext();
   const normalizedDepartment = (departmentCode || '').trim().toUpperCase();
@@ -385,6 +403,18 @@ export const assignClassToDepartment = async ({
   if (!selectedCourse?.code || !selectedCourse?.name) {
     throw new Error('Please choose a valid course.');
   }
+
+  const normalizedDayOfWeek = (dayOfWeek || '').trim().toUpperCase();
+  const validDays = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+  if (!validDays.includes(normalizedDayOfWeek)) {
+    throw new Error('Please choose a valid day.');
+  }
+
+  const normalizedStartTime = String(startTime || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(normalizedStartTime)) {
+    throw new Error('Please provide start time in HH:MM format.');
+  }
+  const normalizedEndTime = addOneHourToTime(normalizedStartTime);
 
   const departmentStudents = [];
   let studentsPage = 1;
@@ -449,6 +479,27 @@ export const assignClassToDepartment = async ({
 
   if (error) throw error;
 
+  const timetablePayload = {
+    day_of_week: normalizedDayOfWeek,
+    start_time: `${normalizedStartTime}:00`,
+    end_time: normalizedEndTime,
+    department: normalizedDepartment,
+    course_code: selectedCourse.code,
+    course_name: selectedCourse.name,
+    venue: (venue || '').trim() || null,
+    faculty_email: (facultyEmail || '').trim().toLowerCase() || null,
+    faculty_name: (staffName || '').trim() || null,
+    staff_email: (staffEmail || '').trim().toLowerCase() || null,
+    semester,
+    is_active: true,
+  };
+
+  const { error: timetableError } = await query(() => supabase
+    .from('timetable_entries')
+    .upsert([timetablePayload], { onConflict: 'department,semester,day_of_week,start_time,course_code' }), 'assignClassToDepartment:timetable');
+
+  if (timetableError) throw timetableError;
+
   await logAuditEvent({
     actorEmail: actorEmail || facultyEmail,
     actorRole: actorRole || 'faculty',
@@ -462,6 +513,7 @@ export const assignClassToDepartment = async ({
     newData: {
       department: normalizedDepartment,
       records: rows,
+      timetable: timetablePayload,
     },
   });
 
@@ -1728,7 +1780,52 @@ export const getAttendanceByStudentEmail = async (studentEmail) => {
     nameRows = studentNameRows || [];
   }
 
-  const mergedRows = [...emailResults.flatMap((result) => result.data || []), ...rollNoRows, ...nameRows];
+  let mergedRows = [...emailResults.flatMap((result) => result.data || []), ...rollNoRows, ...nameRows];
+
+  // Fallback for legacy/misaligned semester data: if current semester has no rows, fetch across semesters.
+  if (!mergedRows.length) {
+    const emailFallbackResults = await Promise.all(
+      identity.emails.map((email) =>
+        query(() => supabase
+          .from('attendance_records')
+          .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+          .ilike('student_email', email)
+          .order('attendance_date', { ascending: false })
+          .limit(300), 'getAttendanceByStudentEmail:fallback-by-email')
+      )
+    );
+
+    const firstEmailFallbackError = emailFallbackResults.map((result) => result.error).find(Boolean);
+    if (firstEmailFallbackError) throw firstEmailFallbackError;
+
+    let rollFallbackRows = [];
+    if (identity.registerNo) {
+      const { data: rollRows, error: rollError } = await query(() => supabase
+        .from('attendance_records')
+        .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+        .ilike('roll_no', `%${identity.registerNo}%`)
+        .order('attendance_date', { ascending: false })
+        .limit(300), 'getAttendanceByStudentEmail:fallback-by-roll');
+
+      if (rollError) throw rollError;
+      rollFallbackRows = rollRows || [];
+    }
+
+    let nameFallbackRows = [];
+    if (identity.name && identity.name.length >= 3) {
+      const { data: studentNameRows, error: nameError } = await query(() => supabase
+        .from('attendance_records')
+        .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+        .ilike('student_name', `%${identity.name}%`)
+        .order('attendance_date', { ascending: false })
+        .limit(300), 'getAttendanceByStudentEmail:fallback-by-name');
+
+      if (nameError) throw nameError;
+      nameFallbackRows = studentNameRows || [];
+    }
+
+    mergedRows = [...emailFallbackResults.flatMap((result) => result.data || []), ...rollFallbackRows, ...nameFallbackRows];
+  }
   const deduped = new Map();
   mergedRows.forEach((row) => {
     const key = `${row.course_code || ''}::${row.attendance_date || ''}`;
@@ -1790,10 +1887,59 @@ export const getRecentAttendanceActivityByStudentEmail = async (studentEmail, li
   const firstExtraError = extraResults.map((result) => result.error).find(Boolean);
   if (firstExtraError) throw firstExtraError;
 
-  const mergedRows = [
+  let mergedRows = [
     ...emailResults.flatMap((result) => result.data || []),
     ...extraResults.flatMap((result) => result.data || []),
   ];
+
+  // Fallback for legacy/misaligned semester data: try without semester when no rows are found.
+  if (!mergedRows.length) {
+    const fallbackEmailResults = await Promise.all(
+      identity.emails.map((email) =>
+        query(() => supabase
+          .from('attendance_records')
+          .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
+          .ilike('student_email', email)
+          .order('created_at', { ascending: false })
+          .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:fallback-by-email')
+      )
+    );
+
+    const firstFallbackEmailError = fallbackEmailResults.map((result) => result.error).find(Boolean);
+    if (firstFallbackEmailError) throw firstFallbackEmailError;
+
+    const fallbackExtraQueries = [];
+    if (identity.registerNo) {
+      fallbackExtraQueries.push(
+        query(() => supabase
+          .from('attendance_records')
+          .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
+          .ilike('roll_no', `%${identity.registerNo}%`)
+          .order('created_at', { ascending: false })
+          .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:fallback-by-roll')
+      );
+    }
+
+    if (identity.name && identity.name.length >= 3) {
+      fallbackExtraQueries.push(
+        query(() => supabase
+          .from('attendance_records')
+          .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
+          .ilike('student_name', `%${identity.name}%`)
+          .order('created_at', { ascending: false })
+          .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:fallback-by-name')
+      );
+    }
+
+    const fallbackExtraResults = fallbackExtraQueries.length ? await Promise.all(fallbackExtraQueries) : [];
+    const firstFallbackExtraError = fallbackExtraResults.map((result) => result.error).find(Boolean);
+    if (firstFallbackExtraError) throw firstFallbackExtraError;
+
+    mergedRows = [
+      ...fallbackEmailResults.flatMap((result) => result.data || []),
+      ...fallbackExtraResults.flatMap((result) => result.data || []),
+    ];
+  }
 
   const deduped = new Map();
   mergedRows.forEach((row) => {
@@ -1863,7 +2009,7 @@ export const saveMarksForCourse = async ({ students, selectedCourse, facultyEmai
     quiz: student.quiz,
     end_term: student.endTerm,
     total: Number(student.total.toFixed(1)),
-    grade: student.grade,
+    grade: normalizeGrade(student.grade, student.total),
     faculty_email: facultyEmail || null,
   }));
 

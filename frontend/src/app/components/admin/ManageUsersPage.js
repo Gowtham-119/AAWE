@@ -8,6 +8,53 @@ import { queryKeys } from '../../lib/queryKeys';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog';
 import { toast } from 'sonner';
 
+const hasReadableText = (value) => /[a-z0-9]/i.test((value || '').trim());
+
+const formatNameFromEmail = (email) => {
+  const ignoredDepartmentTokens = new Set(['it', 'cs', 'ag', 'ai', 'ece', 'eee', 'mech', 'civil']);
+  const localPart = String(email || '').split('@')[0] || '';
+
+  const cleanedWords = localPart
+    .replace(/[._-]+/g, ' ')
+    .split(' ')
+    .map((word) => word.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((word) => !ignoredDepartmentTokens.has(word))
+    .filter((word) => !/^[a-z]{1,3}\d{2,4}$/i.test(word))
+    .filter((word) => !/^\d{2,4}$/.test(word));
+
+  const wordsForName = cleanedWords.length ? cleanedWords : localPart
+    .replace(/[._-]+/g, ' ')
+    .split(' ')
+    .map((word) => word.trim().toLowerCase())
+    .filter(Boolean);
+
+  return wordsForName
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+const getVisibleUserName = (user) => {
+  const displayName = (user?.displayName || '').trim();
+  const normalizedEmail = (user?.email || '').trim().toLowerCase();
+  const normalizedDisplayName = displayName.toLowerCase();
+
+  const looksLikeEmail = normalizedDisplayName.includes('@');
+  const sameAsEmail = Boolean(normalizedEmail) && normalizedDisplayName === normalizedEmail;
+
+  if (hasReadableText(displayName) && !looksLikeEmail && !sameAsEmail) return displayName;
+
+  const emailName = formatNameFromEmail(user?.email || '');
+  if (hasReadableText(emailName)) return emailName;
+
+  return 'Unknown User';
+};
+
+const getVisibleUserEmail = (user) => {
+  const email = (user?.email || '').trim();
+  return hasReadableText(email) ? email : 'No email';
+};
+
 const ManageUsersPage = () => {
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
@@ -124,10 +171,13 @@ const ManageUsersPage = () => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
     return users.filter((user) => {
+      const visibleName = getVisibleUserName(user).toLowerCase();
+      const visibleEmail = getVisibleUserEmail(user).toLowerCase();
+      const visibleDepartment = (user.department || 'NA').toLowerCase();
       const matchesSearch = !normalizedSearch
-        || user.displayName.toLowerCase().includes(normalizedSearch)
-        || user.email.toLowerCase().includes(normalizedSearch)
-        || user.department.toLowerCase().includes(normalizedSearch);
+        || visibleName.includes(normalizedSearch)
+        || visibleEmail.includes(normalizedSearch)
+        || visibleDepartment.includes(normalizedSearch);
       const matchesRole = roleFilter === 'all' || user.role === roleFilter;
       const matchesDepartment = departmentFilter === 'all' || user.department === departmentFilter;
       const matchesActive = activeFilter === 'all'
@@ -244,8 +294,8 @@ const ManageUsersPage = () => {
     };
 
     const rows = sortedUsers.map((user) => [
-      user.displayName,
-      user.email,
+      getVisibleUserName(user),
+      getVisibleUserEmail(user),
       user.role,
       user.department,
       (user.lastLoginAt || '').replace('T', ' ').slice(0, 16) || 'Never',
@@ -492,8 +542,15 @@ const ManageUsersPage = () => {
               </TableRow>
             </TableHead>
             <TableBody>
+              {!isLoading && pagedUsers.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={9} sx={{ color: '#6b7280' }}>
+                    No users found for the selected filters.
+                  </TableCell>
+                </TableRow>
+              )}
               {pagedUsers.map((user) => (
-                <TableRow key={user.email}>
+                <TableRow key={user.email || user.id}>
                   <TableCell padding="checkbox">
                     <Checkbox
                       checked={selectedEmailSet.has(user.email)}
@@ -501,8 +558,8 @@ const ManageUsersPage = () => {
                       inputProps={{ 'aria-label': `select ${user.email}` }}
                     />
                   </TableCell>
-                  <TableCell>{user.displayName}</TableCell>
-                  <TableCell>{user.email}</TableCell>
+                  <TableCell>{getVisibleUserName(user)}</TableCell>
+                  <TableCell>{getVisibleUserEmail(user)}</TableCell>
                   <TableCell>{user.role}</TableCell>
                   <TableCell>{user.department}</TableCell>
                   <TableCell sx={{ color: '#6b7280' }}>{(user.lastLoginAt || '').replace('T', ' ').slice(0, 16) || 'Never'}</TableCell>

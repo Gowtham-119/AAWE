@@ -20,6 +20,7 @@ import {
 import NoticesPanel from '../ui/NoticesPanel.jsx';
 
 const VENUE_OPTIONS = ['SF', 'ME', 'WW', 'EW', 'LAB'];
+const DAY_OPTIONS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 
 export const FacultyDashboard = () => {
   const { user } = useAuth();
@@ -30,6 +31,8 @@ export const FacultyDashboard = () => {
   const [selectedCourse, setSelectedCourse] = useState('');
   const [selectedStaffEmail, setSelectedStaffEmail] = useState('');
   const [venue, setVenue] = useState('SF');
+  const [dayOfWeek, setDayOfWeek] = useState('MONDAY');
+  const [startTime, setStartTime] = useState('09:00');
   const [assignedRowsPage, setAssignedRowsPage] = useState(0);
   const [assignedRowsPerPage, setAssignedRowsPerPage] = useState(10);
   const [editingCourseCode, setEditingCourseCode] = useState('');
@@ -81,6 +84,7 @@ export const FacultyDashboard = () => {
     mutationFn: assignClassToDepartment,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.assignments(facultyDepartment) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.faculty.timetable(normalizedEmail) });
     },
   });
 
@@ -328,6 +332,16 @@ export const FacultyDashboard = () => {
       return;
     }
 
+    if (!dayOfWeek) {
+      toast.error('Please select day for this class.');
+      return;
+    }
+
+    if (!startTime) {
+      toast.error('Please select start time.');
+      return;
+    }
+
     try {
       const assignedRows = await assignClassMutation.mutateAsync({
         departmentCode: facultyDepartment,
@@ -339,9 +353,11 @@ export const FacultyDashboard = () => {
         actorEmail: user?.email,
         actorRole: user?.role,
         targetStudentEmails,
+        dayOfWeek,
+        startTime,
       });
 
-      toast.success(`${selectedCourseDetails.code} assigned to ${assignedRows.length} students in ${facultyDepartment}.`);
+      toast.success(`${selectedCourseDetails.code} assigned to ${assignedRows.length} students in ${facultyDepartment} (${dayOfWeek} ${startTime}, 1-hour period).`);
     } catch (error) {
       console.error('Failed to assign class:', error);
       toast.error(error?.message || 'Failed to assign class.');
@@ -444,7 +460,7 @@ export const FacultyDashboard = () => {
           </Typography>
 
           <Grid container spacing={2}>
-            <Grid size={{ xs: 12, md: 3 }}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <TextField
                 fullWidth
                 label="Department"
@@ -455,7 +471,7 @@ export const FacultyDashboard = () => {
               />
             </Grid>
 
-            <Grid size={{ xs: 12, md: 3 }}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <FormControl fullWidth>
                 <InputLabel>Class</InputLabel>
                 <Select
@@ -473,7 +489,7 @@ export const FacultyDashboard = () => {
               </FormControl>
             </Grid>
 
-            <Grid size={{ xs: 12, md: 3 }}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <FormControl fullWidth>
                 <InputLabel>Venue</InputLabel>
                 <Select
@@ -488,7 +504,7 @@ export const FacultyDashboard = () => {
               </FormControl>
             </Grid>
 
-            <Grid size={{ xs: 12, md: 3 }}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <FormControl fullWidth>
                 <InputLabel>Staff</InputLabel>
                 <Select
@@ -504,6 +520,34 @@ export const FacultyDashboard = () => {
                   ))}
                 </Select>
               </FormControl>
+            </Grid>
+
+            <Grid size={{ xs: 12, md: 2 }}>
+              <FormControl fullWidth>
+                <InputLabel>Day</InputLabel>
+                <Select
+                  value={dayOfWeek}
+                  label="Day"
+                  onChange={(event) => setDayOfWeek(event.target.value)}
+                >
+                  {DAY_OPTIONS.map((day) => (
+                    <MenuItem key={day} value={day}>{day}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+
+            <Grid size={{ xs: 12, md: 2 }}>
+              <TextField
+                fullWidth
+                type="time"
+                label="Start Time"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+                helperText="End time is auto-calculated (+1 hour)"
+                inputProps={{ step: 300 }}
+                InputLabelProps={{ shrink: true }}
+              />
             </Grid>
 
             <Grid size={{ xs: 12 }}>
