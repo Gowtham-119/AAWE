@@ -11,14 +11,6 @@ import {
   useTheme,
 } from '@mui/material';
 import { Award, BookOpen, ClipboardCheck, TrendingUp } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip as RechartsTooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import { Skeleton } from '../ui/skeleton';
 
 const statConfig = [
@@ -54,7 +46,7 @@ const statConfig = [
 
 const MotionCard = motion(Card);
 
-const StudentStats = ({ loading, summary, trendData }) => {
+const StudentStats = ({ loading, summary }) => {
   const theme = useTheme();
 
   const stats = useMemo(
@@ -154,39 +146,6 @@ const StudentStats = ({ loading, summary, trendData }) => {
         );
       })}
 
-      <Grid size={{ xs: 12 }}>
-        <Card
-          sx={{
-            borderRadius: 4,
-            backgroundColor: alpha(theme.palette.background.paper, 0.8),
-            backdropFilter: 'blur(14px)',
-            boxShadow: '0 14px 36px rgba(15,23,42,0.08)',
-            border: `1px solid ${alpha(theme.palette.common.white, 0.5)}`,
-          }}
-        >
-          <CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
-            <Typography sx={{ fontSize: '0.88rem', fontWeight: 600, color: '#475569', mb: 1.25 }}>
-              Attendance Trend
-            </Typography>
-            <Box sx={{ width: '100%', height: 170 }}>
-              <ResponsiveContainer>
-                <AreaChart data={trendData} margin={{ left: -12, right: 8, top: 8, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="attendanceArea" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#0ea5a5" stopOpacity={0.4} />
-                      <stop offset="100%" stopColor="#0ea5a5" stopOpacity={0.04} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
-                  <YAxis domain={[0, 100]} tickLine={false} axisLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} width={30} />
-                  <RechartsTooltip formatter={(value) => [`${value}%`, 'Attendance']} />
-                  <Area type="monotone" dataKey="value" stroke="#0f766e" strokeWidth={2.5} fill="url(#attendanceArea)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Box>
-          </CardContent>
-        </Card>
-      </Grid>
     </>
   );
 };

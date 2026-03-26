@@ -956,8 +956,16 @@ create table if not exists public.timetable_entries (
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  constraint timetable_entries_one_hour_period check (end_time = (start_time + interval '1 hour')::time),
   unique (department, semester, day_of_week, start_time, course_code)
 );
+
+alter table public.timetable_entries
+drop constraint if exists timetable_entries_one_hour_period;
+
+alter table public.timetable_entries
+add constraint timetable_entries_one_hour_period
+check (end_time = (start_time + interval '1 hour')::time);
 
 create index if not exists idx_timetable_department_semester
   on public.timetable_entries(department, semester);

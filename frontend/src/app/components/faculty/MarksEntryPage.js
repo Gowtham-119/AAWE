@@ -146,10 +146,16 @@ export const MarksEntryPage = () => {
   const [students, setStudents] = useState([]);
 
   useEffect(() => {
-    if (departmentCourses.length > 0 && !selectedCourse) {
-      setSelectedCourse(departmentCourses[0].code);
+    if (!departmentCourses.length) {
+      setSelectedCourse('');
+      return;
     }
-  }, [departmentCourses, selectedCourse]);
+
+    setSelectedCourse((previousCourseCode) => {
+      if (departmentCourses.some((course) => course.code === previousCourseCode)) return previousCourseCode;
+      return departmentCourses[0].code;
+    });
+  }, [departmentCourses]);
 
   const belongsToFacultyDepartment = (student) => {
     if (!facultyDepartment) return true;
@@ -267,7 +273,8 @@ export const MarksEntryPage = () => {
       if (student.id !== id) return student;
       const updated = { ...student, [field]: normalizedValue };
       const total = calculateTotal(updated);
-      return { ...updated, total };
+      const grade = gradeForTotal(total, gradeBoundaries);
+      return { ...updated, total, grade };
     }));
 
     if (isInvalid) {
@@ -295,7 +302,7 @@ export const MarksEntryPage = () => {
       return {
         ...updated,
         total,
-        grade: String(row?.grade || gradeForTotal(total, gradeBoundaries)).toUpperCase(),
+        grade: gradeForTotal(total, gradeBoundaries),
       };
     });
 
@@ -358,7 +365,7 @@ export const MarksEntryPage = () => {
         return {
           ...updated,
           total,
-          grade: String(row.grade || gradeForTotal(total, gradeBoundaries)).toUpperCase(),
+          grade: gradeForTotal(total, gradeBoundaries),
         };
       }));
 

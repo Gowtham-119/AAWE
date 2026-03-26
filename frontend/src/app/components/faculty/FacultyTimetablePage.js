@@ -26,7 +26,16 @@ const FacultyTimetablePage = () => {
       if (!map.has(entry.dayOfWeek)) map.set(entry.dayOfWeek, []);
       map.get(entry.dayOfWeek).push(entry);
     });
-    return DAY_ORDER.filter((day) => map.has(day)).map((day) => ({ day, items: map.get(day) }));
+
+    return DAY_ORDER
+      .filter((day) => map.has(day))
+      .map((day) => ({
+        day,
+        items: map.get(day).map((entry, index) => ({
+          ...entry,
+          periodNumber: index + 1,
+        })),
+      }));
   }, [entries]);
 
   return (
@@ -59,7 +68,7 @@ const FacultyTimetablePage = () => {
                           <Chip size="small" label={entry.department} />
                         </Box>
                         <Typography sx={{ mt: 0.6, color: '#475569', fontSize: '0.86rem' }}>
-                          {entry.startTime} - {entry.endTime} | {entry.venue || 'Venue TBA'}
+                          Period {entry.periodNumber} (1 hour) | {entry.startTime} - {entry.endTime} | {entry.venue || 'Venue TBA'}
                         </Typography>
                         <Typography sx={{ mt: 0.4, color: '#64748b', fontSize: '0.8rem' }}>
                           Semester: {entry.semester || 'N/A'}
