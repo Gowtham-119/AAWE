@@ -15,7 +15,6 @@ import {
   getClassAssignmentsByStudentEmail,
   getMarksByStudentEmail,
   getNotices,
-  getRecentAttendanceActivityByStudentEmail,
   getStudentProfileByEmail,
   getStudentTimetableByEmail,
 } from '../../lib/academicDataApi';
@@ -72,12 +71,11 @@ export const StudentDashboard = () => {
     staleTime: LIVE_STALE_TIME_MS,
   });
 
-  const { data: recentAttendanceActivity = [], isLoading: isLoadingRecentActivity } = useQuery({
-    queryKey: ['student-recent-activity', normalizedEmail],
-    queryFn: () => getRecentAttendanceActivityByStudentEmail(normalizedEmail, 5),
-    enabled: Boolean(normalizedEmail),
-    staleTime: LIVE_STALE_TIME_MS,
-  });
+  const recentAttendanceActivity = useMemo(() => (
+    [...attendanceRows]
+      .sort((left, right) => String(right.attendance_date || '').localeCompare(String(left.attendance_date || '')))
+      .slice(0, 5)
+  ), [attendanceRows]);
 
   const { data: timetableRows = [], isLoading: isLoadingTimetable } = useQuery({
     queryKey: queryKeys.student.timetable(normalizedEmail, resolvedDepartment),
@@ -157,7 +155,11 @@ export const StudentDashboard = () => {
     return formatNameFromEmail(normalizedEmail) || 'Student';
   }, [profileData?.name, normalizedEmail]);
 
-  const isDashboardLoading = isLoadingProfile || isLoadingAssignedClasses || isLoadingAttendance || isLoadingMarks;
+  const isSummaryLoading = !attendanceRows.length && !marksRows.length && (isLoadingAttendance || isLoadingMarks);
+  const isCoursesLoading = !courseCards.length && (isLoadingAttendance || isLoadingMarks);
+  const isRecentActivityLoading = !recentAttendanceActivity.length && isLoadingAttendance;
+  const isUpcomingActivitiesLoading = !upcomingActivities.length
+    && (isLoadingAssignedClasses || isLoadingTimetable || isLoadingNotices || isRecentActivityLoading);
 
   useEffect(() => {
     if (!normalizedEmail) return undefined;
@@ -189,7 +191,6 @@ export const StudentDashboard = () => {
         },
         () => {
           void queryClient.invalidateQueries({ queryKey: queryKeys.student.attendance(normalizedEmail) });
-          void queryClient.invalidateQueries({ queryKey: ['student-recent-activity', normalizedEmail] });
         }
       )
       .subscribe();
@@ -415,7 +416,7 @@ export const StudentDashboard = () => {
 
       <Grid container spacing={2}>
         <StudentStats
-          loading={isDashboardLoading}
+          loading={isSummaryLoading}
           summary={studentSummary}
         />
       </Grid>
@@ -424,17 +425,17 @@ export const StudentDashboard = () => {
         <Grid size={{ xs: 12 }}>
           <UpcomingActivities
             activities={upcomingActivities}
-            isLoading={isLoadingAssignedClasses || isLoadingTimetable || isLoadingNotices || isLoadingRecentActivity}
+            isLoading={isUpcomingActivitiesLoading}
           />
         </Grid>
       </Grid>
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, lg: 8 }}>
-          <CourseProgress courses={courseCards} isLoading={isDashboardLoading} />
+          <CourseProgress courses={courseCards} isLoading={isCoursesLoading} />
         </Grid>
         <Grid size={{ xs: 12, lg: 4 }}>
-          <RecentActivity activities={recentActivityFeed} isLoading={isLoadingRecentActivity} />
+          <RecentActivity activities={recentActivityFeed} isLoading={isRecentActivityLoading} />
         </Grid>
       </Grid>
     </Box>
