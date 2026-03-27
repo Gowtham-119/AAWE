@@ -158,8 +158,7 @@ export const StudentDashboard = () => {
   const isSummaryLoading = !attendanceRows.length && !marksRows.length && (isLoadingAttendance || isLoadingMarks);
   const isCoursesLoading = !courseCards.length && (isLoadingAttendance || isLoadingMarks);
   const isRecentActivityLoading = !recentAttendanceActivity.length && isLoadingAttendance;
-  const isUpcomingActivitiesLoading = !upcomingActivities.length
-    && (isLoadingAssignedClasses || isLoadingTimetable || isLoadingNotices || isRecentActivityLoading);
+  const isUpcomingActivitiesLoading = isLoadingAssignedClasses || isLoadingTimetable || isLoadingNotices || isRecentActivityLoading;
 
   useEffect(() => {
     if (!normalizedEmail) return undefined;
