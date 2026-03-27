@@ -27,11 +27,15 @@ const StudentCoursesPage = () => {
     enabled: Boolean(normalizedEmail),
     staleTime: LIVE_STALE_TIME_MS,
     queryFn: async () => {
-      const [attendanceRows, marksRows, assignmentRows] = await Promise.all([
+      const assignmentRows = await getClassAssignmentsByStudentEmail(normalizedEmail, user?.department || '');
+
+      const [attendanceResult, marksResult] = await Promise.allSettled([
         getAttendanceByStudentEmail(normalizedEmail),
         getMarksByStudentEmail(normalizedEmail),
-        getClassAssignmentsByStudentEmail(normalizedEmail, user?.department || ''),
       ]);
+
+      const attendanceRows = attendanceResult.status === 'fulfilled' ? attendanceResult.value : [];
+      const marksRows = marksResult.status === 'fulfilled' ? marksResult.value : [];
 
       const byCode = new Map();
       assignmentRows.forEach((row) => {
