@@ -3,6 +3,10 @@
   command = "npm run build"
   publish = "build"
 
+[build.environment]
+  REACT_APP_SUPABASE_URL = "https://nrrkwzjxjgvjnoiyeghc.supabase.co"
+  REACT_APP_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ycmt3emp4amd2am5vaXllZ2hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwODg4OTEsImV4cCI6MjA4NzY2NDg5MX0.PR5MN7ikWgxodm-_T66vMKTher0UmXXh7X45Xzyxyhg"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
