@@ -16,6 +16,7 @@ import {
   getFacultyProfileByEmail,
   getStudents,
   updateClassAssignmentVenueByDepartmentCourse,
+  getFacultyTimetableByEmail,
 } from '../../lib/academicDataApi';
 import NoticesPanel from '../ui/NoticesPanel.jsx';
 
@@ -26,6 +27,19 @@ export const FacultyDashboard = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const normalizedEmail = (user?.email || '').trim().toLowerCase();
+
+  const formatDateTime = (value) => {
+    if (!value) return 'N/A';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
 
   const [facultyDepartment, setFacultyDepartment] = useState((user?.department || '').trim().toUpperCase());
   const [selectedCourse, setSelectedCourse] = useState('');
@@ -70,6 +84,13 @@ export const FacultyDashboard = () => {
     staleTime: LIVE_STALE_TIME_MS,
   });
 
+  const { data: timetableRows = [] } = useQuery({
+    queryKey: queryKeys.faculty.timetable(normalizedEmail),
+    queryFn: () => getFacultyTimetableByEmail(normalizedEmail),
+    enabled: Boolean(normalizedEmail),
+    staleTime: LIVE_STALE_TIME_MS,
+  });
+
   const { data: selectedDepartmentCount = 0 } = useQuery({
     queryKey: queryKeys.faculty.students(facultyDepartment, 1, 1),
     queryFn: async () => {
@@ -104,10 +125,21 @@ export const FacultyDashboard = () => {
 
   const assignedRows = useMemo(() => {
     const grouped = new Map();
+    const timetableByCourse = new Map();
+
+    timetableRows.forEach((row) => {
+      const courseCode = (row.courseCode || '').trim().toUpperCase();
+      if (!courseCode || timetableByCourse.has(courseCode)) return;
+
+      timetableByCourse.set(courseCode, row);
+    });
 
     assignmentSourceRows.forEach((row) => {
       const key = `${row.course_code}::${row.staff_email || row.staff_name || ''}`;
       const current = grouped.get(key);
+      const timetableRow = timetableByCourse.get((row.course_code || '').trim().toUpperCase()) || null;
+      const dayLabel = timetableRow?.dayOfWeek || 'TBA';
+      const timeLabel = timetableRow ? `${timetableRow.startTime || 'TBA'} - ${timetableRow.endTime || 'TBA'}` : 'TBA';
 
       if (!current) {
         grouped.set(key, {
@@ -116,6 +148,8 @@ export const FacultyDashboard = () => {
           venue: row.venue || '',
           staffName: row.staff_name || 'N/A',
           staffEmail: row.staff_email || '',
+          dayOfWeek: dayLabel,
+          timeRange: timeLabel,
           studentCount: 1,
           updatedAt: row.updated_at,
         });
@@ -125,12 +159,14 @@ export const FacultyDashboard = () => {
       grouped.set(key, {
         ...current,
         studentCount: current.studentCount + 1,
+        dayOfWeek: current.dayOfWeek || dayLabel,
+        timeRange: current.timeRange || timeLabel,
         updatedAt: current.updatedAt > row.updated_at ? current.updatedAt : row.updated_at,
       });
     });
 
     return Array.from(grouped.values());
-  }, [assignmentSourceRows]);
+  }, [assignmentSourceRows, timetableRows]);
 
   const quickStats = useMemo(() => ([
     {
@@ -605,6 +641,9 @@ export const FacultyDashboard = () => {
               <TableRow>
                 <TableCell>Course</TableCell>
                 <TableCell>Staff</TableCell>
+                <TableCell>Date & Time</TableCell>
+                <TableCell>Day</TableCell>
+                <TableCell>Time</TableCell>
                 <TableCell>Students</TableCell>
                 <TableCell>Venue</TableCell>
                 <TableCell align="right">Actions</TableCell>
@@ -613,13 +652,13 @@ export const FacultyDashboard = () => {
             <TableBody>
               {isLoadingAssignedRows && (
                 <TableRow>
-                  <TableCell colSpan={5} sx={{ color: '#6b7280' }}>Loading assigned venues...</TableCell>
+                  <TableCell colSpan={8} sx={{ color: '#6b7280' }}>Loading assigned venues...</TableCell>
                 </TableRow>
               )}
 
               {!isLoadingAssignedRows && !assignedRows.length && (
                 <TableRow>
-                  <TableCell colSpan={5} sx={{ color: '#6b7280' }}>No class assignments yet.</TableCell>
+                  <TableCell colSpan={8} sx={{ color: '#6b7280' }}>No class assignments yet.</TableCell>
                 </TableRow>
               )}
 
@@ -629,6 +668,9 @@ export const FacultyDashboard = () => {
                   <TableRow key={`${row.courseCode}-${row.staffEmail || row.staffName}`}>
                     <TableCell>{row.courseCode} - {row.courseName}</TableCell>
                     <TableCell>{row.staffName}</TableCell>
+                    <TableCell>{formatDateTime(row.updatedAt)}</TableCell>
+                    <TableCell>{row.dayOfWeek || 'TBA'}</TableCell>
+                    <TableCell>{row.timeRange || 'TBA'}</TableCell>
                     <TableCell>{row.studentCount}</TableCell>
                     <TableCell>
                       {isEditingRow ? (

@@ -18,7 +18,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
-import { getAttendanceByStudentEmail, getClassAssignmentsByStudentEmail } from '../../lib/academicDataApi';
+import { getStudentAttendancePageData } from '../../lib/academicDataApi';
 import { LIVE_STALE_TIME_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
 import { supabase } from '../../lib/supabaseClient.js';
@@ -27,20 +27,36 @@ const StudentAttendancePage = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const normalizedEmail = (user?.email || '').trim().toLowerCase();
+  const attendanceCacheKey = `aawe:student-attendance-snapshot:${normalizedEmail}`;
 
-  const { data: attendanceRows = [], isLoading } = useQuery({
+  const cachedAttendanceSnapshot = useMemo(() => {
+    if (typeof window === 'undefined' || !normalizedEmail) {
+      return null;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(attendanceCacheKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return {
+        attendanceRows: Array.isArray(parsed?.attendanceRows) ? parsed.attendanceRows : [],
+        assignedCourses: Array.isArray(parsed?.assignedCourses) ? parsed.assignedCourses : [],
+      };
+    } catch {
+      return null;
+    }
+  }, [attendanceCacheKey, normalizedEmail]);
+
+  const { data: attendanceSnapshot = { attendanceRows: [], assignedCourses: [] }, isLoading, isError, error } = useQuery({
     queryKey: queryKeys.student.attendance(normalizedEmail),
-    queryFn: () => getAttendanceByStudentEmail(normalizedEmail),
+    queryFn: () => getStudentAttendancePageData(normalizedEmail, user?.department || ''),
     enabled: Boolean(normalizedEmail),
     staleTime: LIVE_STALE_TIME_MS,
+    initialData: cachedAttendanceSnapshot || undefined,
   });
 
-  const { data: assignedCourses = [] } = useQuery({
-    queryKey: ['student-attendance-assigned-courses', normalizedEmail],
-    queryFn: () => getClassAssignmentsByStudentEmail(normalizedEmail, user?.department || ''),
-    enabled: Boolean(normalizedEmail),
-    staleTime: LIVE_STALE_TIME_MS,
-  });
+  const attendanceRows = attendanceSnapshot.attendanceRows || [];
+  const assignedCourses = attendanceSnapshot.assignedCourses || [];
 
   const glassCardSx = {
     borderRadius: 3,
@@ -49,6 +65,20 @@ const StudentAttendancePage = () => {
     boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
     border: '1px solid rgba(148,163,184,0.22)',
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !normalizedEmail) return;
+
+    try {
+      window.localStorage.setItem(attendanceCacheKey, JSON.stringify({
+        attendanceRows,
+        assignedCourses,
+        cachedAt: new Date().toISOString(),
+      }));
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [attendanceCacheKey, assignedCourses, attendanceRows, normalizedEmail]);
 
   useEffect(() => {
     if (!normalizedEmail) return undefined;
@@ -70,7 +100,7 @@ const StudentAttendancePage = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'class_assignments' },
         () => {
-          void queryClient.invalidateQueries({ queryKey: ['student-attendance-assigned-courses', normalizedEmail] });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.student.attendance(normalizedEmail) });
         }
       )
       .subscribe();
@@ -146,14 +176,14 @@ const StudentAttendancePage = () => {
         .sort((left, right) => String(right.attendance_date || '').localeCompare(String(left.attendance_date || '')))
         .slice(0, 10)
         .map((row) => ({
-        date: new Date(row.attendance_date).toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        }),
-        course: row.course_code,
-        status: row.is_present ? 'present' : 'absent',
-      })),
+          date: new Date(row.attendance_date).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          }),
+          course: row.course_code,
+          status: row.is_present ? 'present' : 'absent',
+        })),
     [attendanceRows]
   );
 
@@ -260,6 +290,11 @@ const StudentAttendancePage = () => {
             <CardContent>
               {isLoading && (
                 <Typography sx={{ mb: 2, color: '#6b7280' }}>Loading attendance...</Typography>
+              )}
+              {isError && (
+                <Typography sx={{ mb: 2, color: '#b91c1c' }}>
+                  Failed to load attendance: {error?.message || 'Please refresh or check your Supabase setup.'}
+                </Typography>
               )}
               {!isLoading && courses.length === 0 && (
                 <Typography sx={{ mb: 2, color: '#6b7280' }}>

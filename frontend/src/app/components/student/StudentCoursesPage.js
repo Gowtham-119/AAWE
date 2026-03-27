@@ -22,7 +22,7 @@ const StudentCoursesPage = () => {
     border: '1px solid rgba(148,163,184,0.22)',
   };
 
-  const { data: studentCourseData = { courses: [], attendanceRows: [], marksRows: [] }, isLoading } = useQuery({
+  const { data: studentCourseData = { courses: [], attendanceRows: [], marksRows: [] }, isLoading, isError, error } = useQuery({
     queryKey: queryKeys.student.coursesSnapshot(normalizedEmail),
     enabled: Boolean(normalizedEmail),
     staleTime: LIVE_STALE_TIME_MS,
@@ -162,6 +162,11 @@ const StudentCoursesPage = () => {
           {isLoading && (
             <Typography sx={{ fontSize: '0.875rem', color: '#6b7280', mb: 2 }}>
               Loading courses...
+            </Typography>
+          )}
+          {isError && (
+            <Typography sx={{ fontSize: '0.875rem', color: '#b91c1c', mb: 2 }}>
+              Failed to load courses: {error?.message || 'Please refresh or check your Supabase setup.'}
             </Typography>
           )}
           {!isLoading && courses.length === 0 && (

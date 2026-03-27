@@ -30,9 +30,19 @@ const isMissingTableError = (error) => {
   );
 };
 
-const query = async (fn, context = '') => {
+const DEFAULT_QUERY_TIMEOUT_MS = 15000;
+
+const query = async (fn, context = '', timeoutMs = DEFAULT_QUERY_TIMEOUT_MS) => {
+  let timeoutId = null;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = globalThis.setTimeout(() => {
+      reject(new Error(`Timed out while loading ${context || 'data'}.`));
+    }, timeoutMs);
+  });
+
   try {
-    return await fn();
+    return await Promise.race([Promise.resolve().then(fn), timeoutPromise]);
   } catch (err) {
     if (isPermissionError(err)) {
       console.warn(`[AAWE] Permission denied: ${context}`);
@@ -40,6 +50,10 @@ const query = async (fn, context = '') => {
     }
     console.error(`[AAWE] Query error in ${context}:`, err);
     throw err;
+  } finally {
+    if (timeoutId) {
+      globalThis.clearTimeout(timeoutId);
+    }
   }
 };
 
@@ -191,6 +205,213 @@ const resolveStudentIdentityByEmail = async (studentEmail) => {
     department: (bestStudentRow?.department || '').trim().toUpperCase(),
     name: (bestStudentRow?.name || '').trim(),
   };
+};
+
+const fetchClassAssignmentsByIdentity = async (identity, semester, departmentCode = null) => {
+  const normalizedEmail = identity.emails[0] || '';
+  const normalizedDepartment = (departmentCode || '').trim().toUpperCase();
+  const inferredDepartment = extractDepartmentCode(normalizedEmail);
+  const fallbackDepartment = normalizedDepartment || identity.department || (inferredDepartment !== 'NA' ? inferredDepartment : '');
+
+  if (!identity.emails.length && !fallbackDepartment) return [];
+
+  if (identity.emails.length) {
+    const assignmentResults = await Promise.all(
+      identity.emails.map((email) =>
+        query(() => supabase
+          .from('class_assignments')
+          .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+          .ilike('student_email', email)
+          .eq('semester', semester)
+          .order('updated_at', { ascending: false }), 'getClassAssignmentsByStudentEmail:by-email')
+      )
+    );
+
+    const firstEmailError = assignmentResults.map((result) => result.error).find(Boolean);
+    if (firstEmailError) throw firstEmailError;
+
+    const emailRows = assignmentResults.flatMap((result) => result.data || []);
+    if (emailRows.length) {
+      const grouped = new Map();
+      emailRows.forEach((row) => {
+        const key = `${row.course_code || ''}::${row.staff_email || row.staff_name || ''}::${row.venue || ''}`;
+        if (!grouped.has(key)) grouped.set(key, row);
+      });
+      return Array.from(grouped.values());
+    }
+  }
+
+  const additionalLookupQueries = [];
+  if (identity.registerNo) {
+    additionalLookupQueries.push(
+      query(() => supabase
+        .from('class_assignments')
+        .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+        .ilike('roll_no', `%${identity.registerNo}%`)
+        .eq('semester', semester)
+        .order('updated_at', { ascending: false }), 'getClassAssignmentsByStudentEmail:by-roll')
+    );
+  }
+
+  if (identity.name && identity.name.length >= 3) {
+    additionalLookupQueries.push(
+      query(() => supabase
+        .from('class_assignments')
+        .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+        .ilike('student_name', `%${identity.name}%`)
+        .eq('semester', semester)
+        .order('updated_at', { ascending: false }), 'getClassAssignmentsByStudentEmail:by-name')
+    );
+  }
+
+  if (additionalLookupQueries.length) {
+    const additionalResults = await Promise.all(additionalLookupQueries);
+    const additionalError = additionalResults.map((result) => result.error).find(Boolean);
+    if (additionalError) throw additionalError;
+
+    const additionalRows = additionalResults.flatMap((result) => result.data || []);
+    if (additionalRows.length) {
+      const grouped = new Map();
+      additionalRows.forEach((row) => {
+        const key = `${row.course_code || ''}::${row.staff_email || row.staff_name || ''}::${row.venue || ''}`;
+        if (!grouped.has(key)) grouped.set(key, row);
+      });
+      return Array.from(grouped.values());
+    }
+  }
+
+  if (!fallbackDepartment) return [];
+
+  const { data: departmentRows, error: departmentError } = await query(() => supabase
+    .from('class_assignments')
+    .select('course_code, course_name, venue, staff_name, staff_email, faculty_email, department, updated_at')
+    .ilike('department', fallbackDepartment)
+    .eq('semester', semester)
+    .order('updated_at', { ascending: false }), 'getClassAssignmentsByStudentEmail:by-department');
+
+  if (departmentError) throw departmentError;
+
+  const grouped = new Map();
+  (departmentRows || []).forEach((row) => {
+    const key = `${row.course_code || ''}::${row.staff_email || row.staff_name || ''}::${row.venue || ''}`;
+    if (!grouped.has(key)) grouped.set(key, row);
+  });
+
+  return Array.from(grouped.values());
+};
+
+const fetchAttendanceRowsByIdentity = async (identity, semester) => {
+  if (!identity.emails.length && !identity.registerNo && !identity.name) return [];
+
+  const emailResults = await Promise.all(
+    identity.emails.map((email) =>
+      query(() => supabase
+        .from('attendance_records')
+        .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+        .ilike('student_email', email)
+        .eq('semester', semester)
+        .order('attendance_date', { ascending: false }), 'getAttendanceByStudentEmail:by-email')
+    )
+  );
+
+  const firstEmailError = emailResults.map((result) => result.error).find(Boolean);
+  if (firstEmailError) throw firstEmailError;
+
+  let rollNoRows = [];
+  if (identity.registerNo) {
+    const { data: rollRows, error: rollError } = await query(() => supabase
+      .from('attendance_records')
+      .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+      .ilike('roll_no', `%${identity.registerNo}%`)
+      .eq('semester', semester)
+      .order('attendance_date', { ascending: false }), 'getAttendanceByStudentEmail:by-roll');
+
+    if (rollError) throw rollError;
+    rollNoRows = rollRows || [];
+  }
+
+  let nameRows = [];
+  if (identity.name && identity.name.length >= 3) {
+    const { data: studentNameRows, error: nameError } = await query(() => supabase
+      .from('attendance_records')
+      .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+      .ilike('student_name', `%${identity.name}%`)
+      .eq('semester', semester)
+      .order('attendance_date', { ascending: false }), 'getAttendanceByStudentEmail:by-name');
+
+    if (nameError) throw nameError;
+    nameRows = studentNameRows || [];
+  }
+
+  let mergedRows = [...emailResults.flatMap((result) => result.data || []), ...rollNoRows, ...nameRows];
+
+  if (!mergedRows.length) {
+    const emailFallbackResults = await Promise.all(
+      identity.emails.map((email) =>
+        query(() => supabase
+          .from('attendance_records')
+          .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+          .ilike('student_email', email)
+          .order('attendance_date', { ascending: false })
+          .limit(300), 'getAttendanceByStudentEmail:fallback-by-email')
+      )
+    );
+
+    const firstEmailFallbackError = emailFallbackResults.map((result) => result.error).find(Boolean);
+    if (firstEmailFallbackError) throw firstEmailFallbackError;
+
+    let rollFallbackRows = [];
+    if (identity.registerNo) {
+      const { data: rollRows, error: rollError } = await query(() => supabase
+        .from('attendance_records')
+        .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+        .ilike('roll_no', `%${identity.registerNo}%`)
+        .order('attendance_date', { ascending: false })
+        .limit(300), 'getAttendanceByStudentEmail:fallback-by-roll');
+
+      if (rollError) throw rollError;
+      rollFallbackRows = rollRows || [];
+    }
+
+    let nameFallbackRows = [];
+    if (identity.name && identity.name.length >= 3) {
+      const { data: studentNameRows, error: nameError } = await query(() => supabase
+        .from('attendance_records')
+        .select('course_code, course_name, attendance_date, is_present, faculty_email, roll_no')
+        .ilike('student_name', `%${identity.name}%`)
+        .order('attendance_date', { ascending: false })
+        .limit(300), 'getAttendanceByStudentEmail:fallback-by-name');
+
+      if (nameError) throw nameError;
+      nameFallbackRows = studentNameRows || [];
+    }
+
+    mergedRows = [...emailFallbackResults.flatMap((result) => result.data || []), ...rollFallbackRows, ...nameFallbackRows];
+  }
+
+  const deduped = new Map();
+  mergedRows.forEach((row) => {
+    const key = `${row.course_code || ''}::${row.attendance_date || ''}`;
+    if (!deduped.has(key)) deduped.set(key, row);
+  });
+
+  return Array.from(deduped.values());
+};
+
+export const getStudentAttendancePageData = async (studentEmail, departmentCode = null) => {
+  const { semester } = await getSemesterContext();
+  const identity = await resolveStudentIdentityByEmail(studentEmail);
+
+  if (!identity.emails.length && !identity.registerNo && !identity.name && !departmentCode) {
+    return { attendanceRows: [], assignedCourses: [] };
+  }
+
+  const [attendanceRows, assignedCourses] = await Promise.all([
+    fetchAttendanceRowsByIdentity(identity, semester),
+    fetchClassAssignmentsByIdentity(identity, semester, departmentCode),
+  ]);
+
+  return { attendanceRows, assignedCourses };
 };
 
 export const getStudents = async ({ page = 1, pageSize = 50, department = '' } = {}) => {
@@ -498,7 +719,7 @@ export const assignClassToDepartment = async ({
     .from('timetable_entries')
     .upsert([timetablePayload], { onConflict: 'department,semester,day_of_week,start_time,course_code' }), 'assignClassToDepartment:timetable');
 
-  if (timetableError) throw timetableError;
+  if (timetableError && !isMissingTableError(timetableError)) throw timetableError;
 
   await logAuditEvent({
     actorEmail: actorEmail || facultyEmail,
@@ -948,7 +1169,6 @@ export const getDepartmentsAdmin = async () => {
 export const createDepartment = async ({ code, name }) => {
   const normalizedCode = (code || '').trim().toUpperCase();
   const normalizedName = (name || '').trim();
-
   if (!/^[A-Z]{2,4}$/.test(normalizedCode)) {
     throw new Error('Department code must be 2 to 4 uppercase letters.');
   }
@@ -980,7 +1200,9 @@ export const updateDepartmentName = async ({ code, name }) => {
 
 export const setDepartmentActiveStatus = async ({ code, isActive }) => {
   const normalizedCode = (code || '').trim().toUpperCase();
-  if (!normalizedCode) throw new Error('Department code is required.');
+  if (!normalizedCode) {
+    throw new Error('Department code is required.');
+  }
 
   const { error } = await query(() => supabase
     .from('departments')
@@ -995,132 +1217,20 @@ export const getDepartmentStaff = async (departmentCode) => {
   if (!normalizedDepartment) return [];
 
   const { data, error } = await query(() => supabase
-    .from('department_staff')
-    .select('department, staff_name, staff_email, is_active')
+    .from('user_profiles')
+    .select('email, display_name, department, role')
+    .eq('role', 'faculty')
     .eq('department', normalizedDepartment)
-    .eq('is_active', true)
-    .order('staff_name', { ascending: true }), '');
+    .order('display_name', { ascending: true }), 'getDepartmentStaff');
 
   if (error) throw error;
 
   return (data || []).map((row) => ({
+    email: (row.email || '').trim().toLowerCase(),
+    displayName: (row.display_name || '').trim(),
     department: (row.department || '').trim().toUpperCase(),
-    name: (row.staff_name || '').trim(),
-    email: (row.staff_email || '').trim().toLowerCase(),
+    role: (row.role || '').trim(),
   }));
-};
-
-export const getAdminDashboardData = async () => {
-  const { semester } = await getSemesterContext();
-  const [
-    usersResult,
-    studentsResult,
-    attendanceResult,
-    marksResult,
-    assignmentsResult,
-  ] = await Promise.all([
-    query(() => supabase.from('users').select('email, role, created_at').order('created_at', { ascending: false }), 'getAdminDashboardData:users'),
-    query(() => supabase.from('students').select('email, register_no, name').order('register_no', { ascending: true }), 'getAdminDashboardData:students'),
-    query(() => supabase.from('attendance_records').select('attendance_date, is_present, student_email').eq('semester', semester), 'getAdminDashboardData:attendance'),
-    query(() => supabase.from('marks_records').select('total, student_email, updated_at').eq('semester', semester), 'getAdminDashboardData:marks'),
-    query(() => supabase.from('class_assignments').select('course_code, course_name, student_email, updated_at').eq('semester', semester), 'getAdminDashboardData:assignments'),
-  ]);
-
-  const firstError = [usersResult.error, studentsResult.error, attendanceResult.error, marksResult.error, assignmentsResult.error]
-    .find(Boolean);
-  if (firstError) throw firstError;
-
-  const usersRows = usersResult.data || [];
-  const studentsRows = studentsResult.data || [];
-  const attendanceRows = attendanceResult.data || [];
-  const marksRows = marksResult.data || [];
-  const assignmentRows = assignmentsResult.data || [];
-
-  const totalStudents = usersRows.filter((user) => user.role === 'student').length || studentsRows.length;
-  const totalFaculty = usersRows.filter((user) => user.role === 'faculty').length;
-
-  const attendanceRate = attendanceRows.length
-    ? Number(
-      ((attendanceRows.filter((row) => row.is_present).length / attendanceRows.length) * 100).toFixed(1)
-    )
-    : 0;
-
-  const avgMarks = marksRows.length
-    ? Number(
-      (
-        marksRows.reduce((accumulator, row) => accumulator + Number(row.total || 0), 0)
-        / marksRows.length
-      ).toFixed(1)
-    )
-    : 0;
-
-  const attendanceByDate = new Map();
-  attendanceRows.forEach((row) => {
-    const key = row.attendance_date;
-    if (!key) return;
-    if (!attendanceByDate.has(key)) {
-      attendanceByDate.set(key, { present: 0, total: 0 });
-    }
-    const current = attendanceByDate.get(key);
-    current.total += 1;
-    if (row.is_present) {
-      current.present += 1;
-    }
-  });
-
-  const attendanceTrend = [...attendanceByDate.entries()]
-    .sort((first, second) => first[0].localeCompare(second[0]))
-    .slice(-6)
-    .map(([date, value]) => ({
-      label: date,
-      rate: value.total ? Number(((value.present / value.total) * 100).toFixed(1)) : 0,
-    }));
-
-  const enrollmentByMonth = new Map();
-  usersRows.forEach((row) => {
-    const month = (row.created_at || '').slice(0, 7);
-    if (!month) return;
-    if (!enrollmentByMonth.has(month)) {
-      enrollmentByMonth.set(month, { students: 0, faculty: 0 });
-    }
-
-    const bucket = enrollmentByMonth.get(month);
-    if (row.role === 'student') bucket.students += 1;
-    if (row.role === 'faculty') bucket.faculty += 1;
-  });
-
-  const enrollmentTrend = [...enrollmentByMonth.entries()]
-    .sort((first, second) => first[0].localeCompare(second[0]))
-    .slice(-6)
-    .map(([month, value]) => ({
-      month,
-      students: value.students,
-      faculty: value.faculty,
-    }));
-
-  const recentActivities = assignmentRows
-    .slice()
-    .sort((first, second) => (second.updated_at || '').localeCompare(first.updated_at || ''))
-    .slice(0, 8)
-    .map((row, index) => ({
-      id: index + 1,
-      action: `Assigned ${row.course_code}`,
-      user: row.student_email,
-      time: (row.updated_at || '').replace('T', ' ').slice(0, 16),
-      status: 'completed',
-    }));
-
-  return {
-    stats: {
-      totalStudents,
-      totalFaculty,
-      attendanceRate,
-      avgMarks,
-    },
-    attendanceTrend,
-    enrollmentTrend,
-    recentActivities,
-  };
 };
 
 export const getAnalyticsData = async () => {
@@ -1839,123 +1949,21 @@ export const getAttendanceByStudentEmail = async (studentEmail) => {
 
 export const getRecentAttendanceActivityByStudentEmail = async (studentEmail, limit = 5) => {
   const normalizedLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(20, Number(limit))) : 5;
-  const { semester } = await getSemesterContext();
-  const identity = await resolveStudentIdentityByEmail(studentEmail);
-  if (!identity.emails.length && !identity.registerNo && !identity.name) return [];
+  const attendanceRows = await getAttendanceByStudentEmail(studentEmail);
 
-  const emailResults = await Promise.all(
-    identity.emails.map((email) =>
-      query(() => supabase
-        .from('attendance_records')
-        .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
-        .ilike('student_email', email)
-        .eq('semester', semester)
-        .order('created_at', { ascending: false })
-        .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:by-email')
-    )
-  );
-
-  const firstEmailError = emailResults.map((result) => result.error).find(Boolean);
-  if (firstEmailError) throw firstEmailError;
-
-  const extraQueries = [];
-  if (identity.registerNo) {
-    extraQueries.push(
-      query(() => supabase
-        .from('attendance_records')
-        .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
-        .ilike('roll_no', `%${identity.registerNo}%`)
-        .eq('semester', semester)
-        .order('created_at', { ascending: false })
-        .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:by-roll')
-    );
-  }
-
-  if (identity.name && identity.name.length >= 3) {
-    extraQueries.push(
-      query(() => supabase
-        .from('attendance_records')
-        .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
-        .ilike('student_name', `%${identity.name}%`)
-        .eq('semester', semester)
-        .order('created_at', { ascending: false })
-        .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:by-name')
-    );
-  }
-
-  const extraResults = extraQueries.length ? await Promise.all(extraQueries) : [];
-  const firstExtraError = extraResults.map((result) => result.error).find(Boolean);
-  if (firstExtraError) throw firstExtraError;
-
-  let mergedRows = [
-    ...emailResults.flatMap((result) => result.data || []),
-    ...extraResults.flatMap((result) => result.data || []),
-  ];
-
-  // Fallback for legacy/misaligned semester data: try without semester when no rows are found.
-  if (!mergedRows.length) {
-    const fallbackEmailResults = await Promise.all(
-      identity.emails.map((email) =>
-        query(() => supabase
-          .from('attendance_records')
-          .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
-          .ilike('student_email', email)
-          .order('created_at', { ascending: false })
-          .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:fallback-by-email')
-      )
-    );
-
-    const firstFallbackEmailError = fallbackEmailResults.map((result) => result.error).find(Boolean);
-    if (firstFallbackEmailError) throw firstFallbackEmailError;
-
-    const fallbackExtraQueries = [];
-    if (identity.registerNo) {
-      fallbackExtraQueries.push(
-        query(() => supabase
-          .from('attendance_records')
-          .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
-          .ilike('roll_no', `%${identity.registerNo}%`)
-          .order('created_at', { ascending: false })
-          .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:fallback-by-roll')
-      );
-    }
-
-    if (identity.name && identity.name.length >= 3) {
-      fallbackExtraQueries.push(
-        query(() => supabase
-          .from('attendance_records')
-          .select('course_code, course_name, attendance_date, is_present, faculty_email, created_at')
-          .ilike('student_name', `%${identity.name}%`)
-          .order('created_at', { ascending: false })
-          .limit(normalizedLimit), 'getRecentAttendanceActivityByStudentEmail:fallback-by-name')
-      );
-    }
-
-    const fallbackExtraResults = fallbackExtraQueries.length ? await Promise.all(fallbackExtraQueries) : [];
-    const firstFallbackExtraError = fallbackExtraResults.map((result) => result.error).find(Boolean);
-    if (firstFallbackExtraError) throw firstFallbackExtraError;
-
-    mergedRows = [
-      ...fallbackEmailResults.flatMap((result) => result.data || []),
-      ...fallbackExtraResults.flatMap((result) => result.data || []),
-    ];
-  }
-
-  const deduped = new Map();
-  mergedRows.forEach((row) => {
-    const key = `${row.course_code || ''}::${row.attendance_date || ''}`;
-    if (!deduped.has(key)) deduped.set(key, row);
-  });
-
-  return Array.from(deduped.values())
-    .sort((first, second) => (second.created_at || '').localeCompare(first.created_at || ''))
-    .slice(0, normalizedLimit);
+  return [...attendanceRows]
+    .sort((left, right) => String(right.attendance_date || '').localeCompare(String(left.attendance_date || '')))
+    .slice(0, normalizedLimit)
+    .map((row) => ({
+      course_code: row.course_code,
+      course_name: row.course_name,
+      attendance_date: row.attendance_date,
+      is_present: row.is_present,
+      faculty_email: row.faculty_email,
+    }));
 };
 
-export const getAttendanceForCourseDate = async ({
-  courseCode,
-  selectedDate,
-}) => {
+export const getAttendanceForCourseDate = async ({ courseCode, selectedDate }) => {
   const { semester } = await getSemesterContext();
   const { data, error } = await query(() => supabase
     .from('attendance_records')
@@ -2196,7 +2204,10 @@ export const getStudentTimetableByEmail = async (studentEmail, studentDepartment
     .eq('semester', semester)
     .eq('is_active', true), 'getStudentTimetableByEmail');
 
-  if (error) throw error;
+  if (error) {
+    if (isMissingTableError(error)) return [];
+    throw error;
+  }
   return sortTimetableRows(data).map(mapTimetableRow);
 };
 
@@ -2212,7 +2223,10 @@ export const getFacultyTimetableByEmail = async (facultyEmail) => {
     .eq('is_active', true)
     .or(`faculty_email.ilike.${normalizedEmail},staff_email.ilike.${normalizedEmail}`), 'getFacultyTimetableByEmail');
 
-  if (error) throw error;
+  if (error) {
+    if (isMissingTableError(error)) return [];
+    throw error;
+  }
   return sortTimetableRows(data).map(mapTimetableRow);
 };
 

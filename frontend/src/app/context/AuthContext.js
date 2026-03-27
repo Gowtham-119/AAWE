@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Snackbar } from '@mui/material';
 import { supabase } from '../lib/supabaseClient';
+import { getStudentAttendancePageData } from '../lib/academicDataApi';
 
 const GOOGLE_POPUP_SUCCESS = 'google-oauth-success';
 const GOOGLE_POPUP_ERROR = 'google-oauth-error';
@@ -10,6 +11,61 @@ const ROLE_DISPLAY_NAMES = {
   admin: 'Admin User',
   faculty: 'Dr. Sarah Johnson',
   student: 'Alex Thompson',
+};
+
+const AUTH_CACHE_KEY = 'aawe:auth-user';
+const STUDENT_ATTENDANCE_CACHE_PREFIX = 'aawe:student-attendance-snapshot:';
+
+const readCachedJson = (key, fallbackValue = null) => {
+  if (typeof window === 'undefined') return fallbackValue;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallbackValue;
+    return JSON.parse(raw);
+  } catch {
+    return fallbackValue;
+  }
+};
+
+const writeCachedJson = (key, value) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage quota / serialization issues.
+  }
+};
+
+const removeCachedKey = (key) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const getStudentAttendanceCacheKey = (email) => `${STUDENT_ATTENDANCE_CACHE_PREFIX}${(email || '').trim().toLowerCase()}`;
+
+const warmPostLoginCache = async (resolvedUser) => {
+  if (!resolvedUser?.email) return;
+
+  writeCachedJson(AUTH_CACHE_KEY, {
+    user: resolvedUser,
+    cachedAt: new Date().toISOString(),
+  });
+
+  if (resolvedUser.role !== 'student') return;
+
+  try {
+    const snapshot = await getStudentAttendancePageData(resolvedUser.email, resolvedUser.department || '');
+    writeCachedJson(getStudentAttendanceCacheKey(resolvedUser.email), {
+      ...snapshot,
+      cachedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn('Failed to warm student attendance cache:', error);
+  }
 };
 
 const resolveProfile = async (authUser) => {
@@ -280,6 +336,11 @@ export const AuthProvider = ({ children }) => {
       const authError = parseAuthErrorFromUrl();
       const isPopup = typeof window !== 'undefined' && window.opener && window.opener !== window;
 
+      const cachedAuth = readCachedJson(AUTH_CACHE_KEY, null);
+      if (isMounted && cachedAuth?.user) {
+        setUser(cachedAuth.user);
+      }
+
       if (isPopup && authError) {
         window.opener.postMessage({ type: GOOGLE_POPUP_ERROR, message: authError }, window.location.origin);
         window.close();
@@ -414,6 +475,7 @@ export const AuthProvider = ({ children }) => {
     await recordLoginSuccess({ email: resolvedUser?.email, role: resolvedUser?.role });
 
     setUser(resolvedUser);
+    void warmPostLoginCache(resolvedUser);
     return resolvedUser;
   };
 
@@ -481,6 +543,7 @@ export const AuthProvider = ({ children }) => {
       try {
         await recordLoginSuccess({ email: resolvedUser?.email, role: resolvedUser?.role });
         setUser(resolvedUser);
+        void warmPostLoginCache(resolvedUser);
         return { ok: true, user: resolvedUser };
       } catch (recordError) {
         await supabase.auth.signOut();
@@ -562,6 +625,10 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
+    if (user?.email) {
+      removeCachedKey(getStudentAttendanceCacheKey(user.email));
+    }
+    removeCachedKey(AUTH_CACHE_KEY);
     await supabase.auth.signOut();
     setUser(null);
   };
