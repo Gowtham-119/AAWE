@@ -332,6 +332,7 @@ export const FacultyDashboard = () => {
 
   const selectedCourseDetails = courses.find((course) => course.code === selectedCourse) || courses[0];
   const selectedStaffDetails = departmentStaff.find((staff) => staff.email === selectedStaffEmail) || null;
+  const getStaffLabel = (staff) => (staff?.name || staff?.displayName || staff?.email || '').trim();
 
   useEffect(() => {
     setAssignedRowsPage(0);
@@ -383,7 +384,7 @@ export const FacultyDashboard = () => {
         departmentCode: facultyDepartment,
         selectedCourse: selectedCourseDetails,
         venue,
-        staffName: selectedStaffDetails.name,
+        staffName: getStaffLabel(selectedStaffDetails),
         staffEmail: selectedStaffDetails.email,
         facultyEmail: user?.email,
         actorEmail: user?.email,
@@ -551,7 +552,7 @@ export const FacultyDashboard = () => {
                 >
                   {departmentStaff.map((staff) => (
                     <MenuItem key={staff.email} value={staff.email}>
-                      {staff.name}
+                      {getStaffLabel(staff)}
                     </MenuItem>
                   ))}
                 </Select>
@@ -609,7 +610,7 @@ export const FacultyDashboard = () => {
                     <Chip size="small" label={selectedCourseDetails.code} sx={{ backgroundColor: '#ede9fe', color: '#6d28d9' }} />
                   )}
                   {selectedStaffDetails && (
-                    <Chip size="small" label={selectedStaffDetails.name} sx={{ backgroundColor: '#dcfce7', color: '#166534' }} />
+                    <Chip size="small" label={getStaffLabel(selectedStaffDetails)} sx={{ backgroundColor: '#dcfce7', color: '#166534' }} />
                   )}
                 </Box>
 

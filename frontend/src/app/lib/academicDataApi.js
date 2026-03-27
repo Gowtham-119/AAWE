@@ -1228,6 +1228,7 @@ export const getDepartmentStaff = async (departmentCode) => {
   return (data || []).map((row) => ({
     email: (row.email || '').trim().toLowerCase(),
     displayName: (row.display_name || '').trim(),
+    name: (row.display_name || '').trim(),
     department: (row.department || '').trim().toUpperCase(),
     role: (row.role || '').trim(),
   }));
